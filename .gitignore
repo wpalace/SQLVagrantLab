@@ -1,0 +1,16 @@
+# Vagrant
+.vagrant/
+*.box
+
+# Packer
+packer_cache/
+packer-build.log
+*.log
+
+# Output
+output-*/
+
+# Temp files
+*.tmp
+*.bak
+.DS_Store

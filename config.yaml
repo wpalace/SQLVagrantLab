@@ -1,0 +1,57 @@
+# =============================================================================
+# SqlVagrantLab - Lab Topology Configuration
+# =============================================================================
+# This file is the single source of truth for the lab environment.
+# Edit this file to change the topology, then re-run Deploy-Lab.ps1.
+# =============================================================================
+
+global:
+  domain_name: test.dev
+  admin_user: admin
+  admin_password: "P@ssw0rd"
+
+  # Path on the HOST machine where pre-built Packer .box files are stored.
+  # Packer build names follow the convention: win{os_version}-sql{sql_version}
+  # e.g. win2022-sql2022, win2025-sql2025, win2022-dc (DomainController nodes)
+  box_library_path: "/opt/vagrant-boxes"
+
+  # Path on the HOST machine where ISO media lives (used by Install-Prerequisites.ps1)
+  media_path: "/root/packer-media"
+
+regions:
+  - name: RegionA
+    # Subnet for host-only network. Each region gets its own isolated network.
+    network: 192.168.10.0/24
+    nodes:
+      - hostname: dc01
+        role: DomainController       # Promotes to AD DS forest root (first DC)
+        os_version: "2022"           # "2022" or "2025"
+        static_ip: 192.168.10.10
+        cpus: 2
+        memory_mb: 2048
+
+      - hostname: sql01
+        role: SQLServer
+        os_version: "2022"
+        sql_version: "2022"          # "2022" or "2025" — always Developer Edition
+        static_ip: 192.168.10.20
+        cpus: 4
+        memory_mb: 4096
+
+#  - name: RegionB
+#    network: 192.168.20.0/24
+#    nodes:
+#      - hostname: dc02
+#        role: DomainController       # Replica DC — joins existing forest
+#        os_version: "2025"
+#        static_ip: 192.168.20.10
+#        cpus: 2
+#        memory_mb: 2048
+#
+#      - hostname: sql02
+#        role: SQLServer
+#        os_version: "2025"
+#        sql_version: "2025"
+#        static_ip: 192.168.20.20
+#        cpus: 4
+#        memory_mb: 4096

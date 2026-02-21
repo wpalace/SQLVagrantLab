@@ -1,0 +1,219 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Autounattend.xml for Windows Server 2022 Evaluation (Standard Desktop Experience)
+  Used during Packer QEMU build phase.
+  
+  Key behaviors:
+  - Selects Windows Server 2022 Standard Evaluation (Desktop Experience)
+  - Creates local Administrator account (password: vagrant)
+  - Creates local vagrant account (password: vagrant) with admin rights
+  - Enables WinRM for Packer communicator
+  - Disables Windows Firewall during setup
+  - Auto-runs SetupComplete.cmd from the floppy to enable WinRM
+
+  WinRM is enabled only for the Packer build. At runtime, SSH (OpenSSH) is used.
+-->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+
+  <!-- ═══════════════════ Pass 1: Windows PE (diskpart + partitioning) ═══════ -->
+  <settings pass="windowsPE">
+
+    <component name="Microsoft-Windows-International-Core-WinPE"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <SetupUILanguage>
+        <UILanguage>en-US</UILanguage>
+      </SetupUILanguage>
+      <InputLocale>en-US</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UILanguageFallback>en-US</UILanguageFallback>
+      <UserLocale>en-US</UserLocale>
+    </component>
+
+    <component name="Microsoft-Windows-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+
+      <!-- Accept evaluation EULA without a product key -->
+      <UserData>
+        <AcceptEula>true</AcceptEula>
+        <FullName>Vagrant</FullName>
+        <Organization>SqlVagrantLab</Organization>
+      </UserData>
+
+      <!-- Disk layout: single MBR partition filling the disk -->
+      <DiskConfiguration>
+        <Disk wcm:action="add" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <DiskID>0</DiskID>
+          <WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>
+            <CreatePartition wcm:action="add"
+                             xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+              <Order>1</Order>
+              <Type>Primary</Type>
+              <Extend>true</Extend>
+            </CreatePartition>
+          </CreatePartitions>
+          <ModifyPartitions>
+            <ModifyPartition wcm:action="add"
+                             xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+              <Order>1</Order>
+              <PartitionID>1</PartitionID>
+              <Label>Windows</Label>
+              <Format>NTFS</Format>
+              <Letter>C</Letter>
+              <Active>true</Active>
+            </ModifyPartition>
+          </ModifyPartitions>
+        </Disk>
+      </DiskConfiguration>
+
+      <!-- Image selection: WS2022 Standard Evaluation with Desktop Experience -->
+      <ImageInstall>
+        <OSImage>
+          <InstallTo>
+            <DiskID>0</DiskID>
+            <PartitionID>1</PartitionID>
+          </InstallTo>
+          <InstallFrom>
+            <MetaData wcm:action="add"
+                      xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+              <Key>/IMAGE/NAME</Key>
+              <Value>Windows Server 2022 SERVERSTANDARD</Value>
+            </MetaData>
+          </InstallFrom>
+        </OSImage>
+      </ImageInstall>
+
+    </component>
+  </settings>
+
+  <!-- ══════════════════════ Pass 4: Specialize ══════════════════════════════ -->
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <ComputerName>PACKER-BUILD</ComputerName>
+      <TimeZone>UTC</TimeZone>
+      <RegisteredOrganization>SqlVagrantLab</RegisteredOrganization>
+    </component>
+
+    <!-- Disable IE enhanced security for WinRM setup scripts -->
+    <component name="Microsoft-Windows-IE-ESC"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <IEHardenAdmin>false</IEHardenAdmin>
+      <IEHardenUser>false</IEHardenUser>
+    </component>
+
+    <!-- Disable server manager auto-start -->
+    <component name="Microsoft-Windows-ServerManager-SvrMgrNc"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+      <DoNotOpenServerManagerAtLogon>true</DoNotOpenServerManagerAtLogon>
+    </component>
+  </settings>
+
+  <!-- ══════════════════════ Pass 7: OOBE System ═════════════════════════════ -->
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-Shell-Setup"
+               processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35"
+               language="neutral"
+               versionScope="nonSxS">
+
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideLocalAccountScreen>true</HideLocalAccountScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <NetworkLocation>Work</NetworkLocation>
+        <ProtectYourPC>3</ProtectYourPC>
+        <SkipMachineOOBE>true</SkipMachineOOBE>
+        <SkipUserOOBE>true</SkipUserOOBE>
+      </OOBE>
+
+      <!-- Time zone + auto-logon for unattended first boot -->
+      <TimeZone>UTC</TimeZone>
+      <AutoLogon>
+        <Enabled>true</Enabled>
+        <LogonCount>3</LogonCount>
+        <Username>vagrant</Username>
+        <Password>
+          <Value>vagrant</Value>
+          <PlainText>true</PlainText>
+        </Password>
+      </AutoLogon>
+
+      <!-- User accounts -->
+      <UserAccounts>
+        <!-- Built-in Administrator — re-enable and set password -->
+        <AdministratorPassword>
+          <Value>vagrant</Value>
+          <PlainText>true</PlainText>
+        </AdministratorPassword>
+
+        <!-- Create 'vagrant' local account (Packer communicator + Vagrant SSH user) -->
+        <LocalAccounts>
+          <LocalAccount wcm:action="add"
+                        xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+            <Name>vagrant</Name>
+            <DisplayName>Vagrant</DisplayName>
+            <Group>Administrators</Group>
+            <Password>
+              <Value>vagrant</Value>
+              <PlainText>true</PlainText>
+            </Password>
+          </LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+
+      <!-- Run WinRM setup + Packer scripts at first logon -->
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add"
+                            xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>1</Order>
+          <Description>Disable firewall for build phase</Description>
+          <CommandLine>cmd.exe /c netsh advfirewall set allprofiles state off</CommandLine>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add"
+                            xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>2</Order>
+          <Description>Set PowerShell execution policy</Description>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -Command "Set-ExecutionPolicy Bypass -Scope LocalMachine -Force"</CommandLine>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add"
+                            xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>3</Order>
+          <Description>Enable WinRM for Packer</Description>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -Command "winrm quickconfig -q; winrm set winrm/config '@{MaxTimeoutms=7200000}'; winrm set winrm/config/winrs '@{MaxMemoryPerShellMB=2048}'; winrm set winrm/config/service '@{AllowUnencrypted=true}'; winrm set winrm/config/service/auth '@{Basic=true}'; Set-Service WinRM -StartupType Automatic; Restart-Service WinRM"</CommandLine>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+
+        <SynchronousCommand wcm:action="add"
+                            xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>4</Order>
+          <Description>Allow WinRM through firewall</Description>
+          <CommandLine>cmd.exe /c netsh advfirewall firewall add rule name="WinRM" protocol=TCP dir=in localport=5985 action=allow</CommandLine>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+    </component>
+  </settings>
+
+</unattend>
