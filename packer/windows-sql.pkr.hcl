@@ -138,7 +138,7 @@ source "qemu" "windows_sql" {
 
   # SQL ISO as a second CD-ROM (OS ISO is index=0 on the IDE bus)
   qemuargs = [
-    ["-drive", "file=${var.sql_iso_path},media=cdrom,index=1,readonly=on"],
+    ["-cdrom", "${var.sql_iso_path}"]
   ]
 
   shutdown_command = "powershell -Command Stop-Computer -Force"
