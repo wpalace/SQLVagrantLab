@@ -129,9 +129,9 @@ source "qemu" "windows_sql" {
   winrm_timeout  = "90m"   # Windows install + WinRM setup takes 30-60 min
   winrm_use_ssl  = false
 
-  # Floppy with Unattend.xml and boot scripts
   floppy_files = [
     "${path.root}/answer_files/win${var.os_version}/Autounattend.xml",
+    "${path.root}/scripts/enable-winrm.ps1",
     "${path.root}/scripts/configure-openssh.ps1",
     "${path.root}/scripts/prepare-image.ps1",
   ]
