@@ -28,8 +28,8 @@ function Wait-ForFile ([string]$path, [int]$TimeoutSec = 120) {
     if (-not (Test-Path $path)) { throw "Timed out waiting for: $path" }
 }
 
-$sqlDrive   = $env:SQL_ISO_DRIVE ?? 'E:'
-$sqlVersion = $env:SQL_VERSION   ?? '2022'
+$sqlDrive = $env:SQL_ISO_DRIVE ?? 'E:'
+$sqlVersion = $env:SQL_VERSION ?? '2022'
 
 # ── 1. Locate SQL Server setup.exe ───────────────────────────────────────────
 
@@ -51,7 +51,6 @@ $prepareArgs = @(
     '/IACCEPTSQLSERVERLICENSETERMS'
     '/FEATURES=SQLEngine,FullText,Conn'
     '/INSTANCEID=MSSQLSERVER'
-    '/INSTANCENAME=MSSQLSERVER'
     '/INDICATEPROGRESS'
 )
 
