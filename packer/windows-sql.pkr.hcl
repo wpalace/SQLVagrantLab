@@ -149,21 +149,41 @@ source "qemu" "windows_sql" {
 build {
   sources = ["source.qemu.windows_sql"]
 
+  # ── Step 0: Install PowerShell 7 ─────────────────────────────────────────────
+  # Must run before the scripts below, which declare #Requires -Version 7.0.
+  # This script is intentionally PS 5.1-compatible (no #Requires directive).
+  provisioner "powershell" {
+    script = "${path.root}/scripts/install-pwsh7.ps1"
+  }
+
   # ── Step 1: Install OpenSSH Server & configure for Vagrant SSH ──────────────
+  # elevated_user makes Packer run this via a scheduled task with a fully
+  # elevated token. Required because Add-WindowsCapability (DISM API) fails
+  # with the filtered token that WinRM Basic auth provides, even for admins.
+  # elevated_execute_command routes the scheduled task through pwsh.exe (PS7)
+  # to satisfy the script's #Requires -Version 7.0 directive.
   provisioner "powershell" {
     script = "${path.root}/scripts/configure-openssh.ps1"
     environment_vars = [
       "VAGRANT_KEY_URL=${var.vagrant_insecure_key}",
     ]
+    elevated_user             = "vagrant"
+    elevated_password         = "vagrant"
+    elevated_execute_command  = "powershell -ExecutionPolicy Bypass -Command \". {{.Vars}}; & 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' -NoLogo -NoProfile -ExecutionPolicy Bypass -File '{{.Path}}'; exit $LASTEXITCODE\""
   }
 
   # ── Step 2: SQL Server PrepareImage (stages binaries, no hostname binding) ───
+  # Same elevation requirement as Step 1 — SQL Server setup.exe also requires
+  # a fully elevated token.
   provisioner "powershell" {
     script = "${path.root}/scripts/prepare-image.ps1"
     environment_vars = [
       "SQL_ISO_DRIVE=E:",     # Second CD-ROM is typically D: or E: on Windows
       "SQL_VERSION=${var.sql_version}",
     ]
+    elevated_user             = "vagrant"
+    elevated_password         = "vagrant"
+    elevated_execute_command  = "powershell -ExecutionPolicy Bypass -Command \". {{.Vars}}; & 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' -NoLogo -NoProfile -ExecutionPolicy Bypass -File '{{.Path}}'; exit $LASTEXITCODE\""
   }
 
   # ── Step 3: Sysprep (generalize image — Packer shuts down the VM after this) ─

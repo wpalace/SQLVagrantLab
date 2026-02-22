@@ -23,7 +23,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$MediaPath   = (Join-Path $HOME 'packer-media'),
+    [string]$MediaPath = '/opt/packer-media',
     [switch]$SkipDownloads,
     [switch]$DryRun
 )
@@ -70,7 +70,8 @@ function Install-AptPackage ([string[]]$Packages) {
             Write-Host "  Installing $pkg..."
             & bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y '$pkg'"
             if ($LASTEXITCODE -ne 0) { throw "apt-get install $pkg failed" }
-        } else {
+        }
+        else {
             Write-Host "  $pkg already installed — skipping"
         }
     }
@@ -83,7 +84,8 @@ function Add-AptRepo ([string]$KeyUrl, [string]$KeyPath, [string]$RepoLine, [str
         & bash -c "curl -fsSL '$KeyUrl' | gpg --dearmor -o '$KeyPath'"
         & bash -c "echo '$RepoLine' > '$ListFile'"
         & bash -c 'apt-get update -qq'
-    } else {
+    }
+    else {
         Write-Host "  Repo already configured: $ListFile"
     }
 }
@@ -92,7 +94,8 @@ function Add-AptRepo ([string]$KeyUrl, [string]$KeyPath, [string]$RepoLine, [str
 function Get-FileWithProgress ([string]$Uri, [string]$Destination, [string]$ExpectedSha256) {
     if (Test-Path $Destination) {
         Write-Warn "Already exists: $Destination — verifying checksum..."
-    } else {
+    }
+    else {
         Write-Host "  ⬇️  Downloading $(Split-Path $Destination -Leaf) ..."
         $tmpFile = "$Destination.tmp"
         try {
@@ -100,9 +103,9 @@ function Get-FileWithProgress ([string]$Uri, [string]$Destination, [string]$Expe
             $response = $client.GetAsync($Uri, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
             $total = $response.Content.Headers.ContentLength
             $stream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
-            $out    = [System.IO.File]::OpenWrite($tmpFile)
+            $out = [System.IO.File]::OpenWrite($tmpFile)
             $buffer = [byte[]]::new(1MB)
-            $read   = 0; $bytes = 0
+            $read = 0; $bytes = 0
             while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
                 $out.Write($buffer, 0, $read)
                 $bytes += $read
@@ -114,7 +117,8 @@ function Get-FileWithProgress ([string]$Uri, [string]$Destination, [string]$Expe
             $out.Close(); $stream.Close()
             Write-Progress -Completed -Activity 'Done'
             Move-Item $tmpFile $Destination -Force
-        } catch {
+        }
+        catch {
             Remove-Item $tmpFile -ErrorAction SilentlyContinue
             throw
         }
@@ -127,7 +131,8 @@ function Get-FileWithProgress ([string]$Uri, [string]$Destination, [string]$Expe
             throw "Checksum mismatch for $Destination`n  Expected: $ExpectedSha256`n  Got:      $actual"
         }
         Write-Ok "Checksum verified: $(Split-Path $Destination -Leaf)"
-    } else {
+    }
+    else {
         Write-Warn "No checksum provided for $(Split-Path $Destination -Leaf) — skipping verification"
     }
 }
@@ -140,25 +145,25 @@ function Get-FileWithProgress ([string]$Uri, [string]$Destination, [string]$Expe
 
 $Isos = @(
     @{
-        Name     = 'Windows Server 2022 Evaluation (180-day)'
-        File     = 'WinServer2022Eval.iso'
-        Url      = 'https://go.microsoft.com/fwlink/p/?LinkID=2195280&clcid=0x409&culture=en-us&country=US'
-        Sha256   = ''   # Populate after first download: (Get-FileHash WinServer2022Eval.iso).Hash
+        Name   = 'Windows Server 2022 Evaluation (180-day)'
+        File   = 'WinServer2022Eval.iso'
+        Url    = 'https://go.microsoft.com/fwlink/p/?LinkID=2195280&clcid=0x409&culture=en-us&country=US'
+        Sha256 = ''   # Populate after first download: (Get-FileHash WinServer2022Eval.iso).Hash
     }
     @{
-        Name     = 'Windows Server 2025 Evaluation (180-day)'
-        File     = 'WinServer2025Eval.iso'
-        Url      = 'https://go.microsoft.com/fwlink/?linkid=2293176&clcid=0x409&culture=en-us&country=US'
-        Sha256   = ''
+        Name   = 'Windows Server 2025 Evaluation (180-day)'
+        File   = 'WinServer2025Eval.iso'
+        Url    = 'https://go.microsoft.com/fwlink/?linkid=2293176&clcid=0x409&culture=en-us&country=US'
+        Sha256 = ''
     }
     @{
-        Name     = 'SQL Server 2022 Developer Edition'
-        File     = 'SQLServer2022-Dev.iso'
+        Name   = 'SQL Server 2022 Developer Edition'
+        File   = 'SQLServer2022-Dev.iso'
         # The SQL Developer ISO is download-manager gated. Use the offline bootstrapper:
         # Run: Setup.exe /Action=Download /MediaPath=<dir> /MediaType=ISO /Quiet
         # Set Url to the bootstrapper .exe, or pre-download the ISO and set SkipDownloads.
-        Url      = 'https://download.microsoft.com/download/3/8/d/38de7036-2433-4207-8eae-06e247e17b25/SQLServer2022-DEV-x64-ENU.iso'
-        Sha256   = ''
+        Url    = 'https://download.microsoft.com/download/3/8/d/38de7036-2433-4207-8eae-06e247e17b25/SQLServer2022-DEV-x64-ENU.iso'
+        Sha256 = ''
     }
     @{
         Name            = 'SQL Server 2025 Developer Edition'
@@ -181,20 +186,21 @@ $Results = [ordered]@{}
 $distro = Get-OsDistro
 Write-Host "Detected Linux distro: $distro" -ForegroundColor Magenta
 
-if ($distro -notin @('ubuntu','debian','fedora','rhel','centos','rocky')) {
+if ($distro -notin @('ubuntu', 'debian', 'fedora', 'rhel', 'centos', 'rocky')) {
     Write-Warn "Distro '$distro' not explicitly tested. Attempting apt-based installation."
 }
-$useApt = $distro -in @('ubuntu','debian')
+$useApt = $distro -in @('ubuntu', 'debian')
 
 # ── 2. QEMU ──────────────────────────────────────────────────────────────────
 
 Invoke-Step 'Install QEMU + KVM + utilities' {
     if ($useApt) {
         & bash -c 'apt-get update -qq'
-        Install-AptPackage @('qemu-system-x86','qemu-utils','qemu-kvm','libvirt-daemon-system','virtinst','bridge-utils')
+        Install-AptPackage @('qemu-system-x86', 'qemu-utils', 'qemu-kvm', 'libvirt-daemon-system', 'virtinst', 'bridge-utils')
         $labUser = $env:SUDO_USER ?? (& bash -c 'logname 2>/dev/null || echo $SUDO_USER')
         if ($labUser) { & bash -c "usermod -aG kvm,libvirt '$labUser'" }
-    } else {
+    }
+    else {
         & bash -c 'dnf install -y qemu-kvm qemu-img libvirt libvirt-client virt-install'
         & bash -c 'systemctl enable --now libvirtd'
     }
@@ -207,14 +213,16 @@ Invoke-Step 'Install HashiCorp Packer' {
     if (-not (Test-Command 'packer')) {
         if ($useApt) {
             $codename = Get-OsCodename
-            $keyPath  = '/usr/share/keyrings/hashicorp-archive-keyring.gpg'
+            $keyPath = '/usr/share/keyrings/hashicorp-archive-keyring.gpg'
             $repoLine = "deb [signed-by=$keyPath] https://apt.releases.hashicorp.com $codename main"
             Add-AptRepo 'https://apt.releases.hashicorp.com/gpg' $keyPath $repoLine '/etc/apt/sources.list.d/hashicorp.list'
             Install-AptPackage @('packer')
-        } else {
+        }
+        else {
             & bash -c 'dnf install -y dnf-plugins-core && dnf config-manager --add-repo https://rpm.releases.hashicorp.com/RHEL/hashicorp.repo && dnf install -y packer'
         }
-    } else {
+    }
+    else {
         Write-Ok 'packer already installed'
     }
 }
@@ -226,14 +234,16 @@ Invoke-Step 'Install HashiCorp Vagrant' {
     if (-not (Test-Command 'vagrant')) {
         if ($useApt) {
             $codename = Get-OsCodename
-            $keyPath  = '/usr/share/keyrings/hashicorp-archive-keyring.gpg'
+            $keyPath = '/usr/share/keyrings/hashicorp-archive-keyring.gpg'
             $repoLine = "deb [signed-by=$keyPath] https://apt.releases.hashicorp.com $codename main"
             Add-AptRepo 'https://apt.releases.hashicorp.com/gpg' $keyPath $repoLine '/etc/apt/sources.list.d/hashicorp.list'
             Install-AptPackage @('vagrant')
-        } else {
+        }
+        else {
             & bash -c 'dnf install -y vagrant'
         }
-    } else {
+    }
+    else {
         Write-Ok 'vagrant already installed'
     }
 }
@@ -246,7 +256,8 @@ Invoke-Step 'Install vagrant-qemu plugin' {
     $plugins = & vagrant plugin list 2>&1
     if ($plugins -notmatch 'vagrant-qemu') {
         & vagrant plugin install vagrant-qemu
-    } else {
+    }
+    else {
         Write-Ok 'vagrant-qemu already installed'
     }
 }
@@ -267,7 +278,8 @@ curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o 
 echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/microsoft-debian-bullseye-prod bullseye main" > /etc/apt/sources.list.d/microsoft.list
 apt-get update -qq && apt-get install -y powershell
 '@
-        } else {
+        }
+        else {
             & bash -c 'rpm --import https://packages.microsoft.com/keys/microsoft.asc && curl -fsSL https://packages.microsoft.com/config/rhel/8/prod.repo > /etc/yum.repos.d/microsoft.repo && dnf install -y powershell'
         }
     }
@@ -280,7 +292,8 @@ Invoke-Step 'Install powershell-yaml PS module' {
     $mod = Get-Module -ListAvailable -Name powershell-yaml
     if (-not $mod) {
         Install-Module -Name powershell-yaml -Scope CurrentUser -Force -AllowClobber
-    } else {
+    }
+    else {
         Write-Ok "powershell-yaml $($mod.Version) already installed"
     }
 }
@@ -323,17 +336,20 @@ if (-not $SkipDownloads) {
                     Write-Warn "     SQLServer2025-Dev-Setup.exe /Action=Download /MediaPath='$MediaPath' /MediaType=ISO /Quiet"
                     Write-Warn "  2. Use Wine: wine '$exePath' /Action=Download /MediaPath='$MediaPath' /MediaType=ISO /Quiet"
                     Write-Warn "  3. Download the ISO manually from https://www.microsoft.com/evalcenter"
-                } else {
+                }
+                else {
                     & $exePath /Action=Download /MediaPath=$MediaPath /MediaType=ISO /Quiet
                     Remove-Item $exePath -ErrorAction SilentlyContinue
                 }
-            } else {
+            }
+            else {
                 Get-FileWithProgress -Uri $iso.Url -Destination $dest -ExpectedSha256 $iso.Sha256
             }
         }
         $Results[$iso.File] = Test-Path $dest
     }
-} else {
+}
+else {
     Write-Warn '-SkipDownloads specified — skipping ISO downloads'
     foreach ($iso in $Isos) {
         $Results[$iso.File] = Test-Path (Join-Path $MediaPath $iso.File)
@@ -345,13 +361,15 @@ if (-not $SkipDownloads) {
 Write-Host "`n$('─' * 60)" -ForegroundColor DarkGray
 Write-Host ' Readiness Summary' -ForegroundColor White
 Write-Host "$('─' * 60)" -ForegroundColor DarkGray
+Write-Host "  📁  Media path : $MediaPath" -ForegroundColor White
 
 $allGreen = $true
 foreach ($key in $Results.Keys) {
     $ok = $Results[$key]
     if ($ok) {
         Write-Host "  ✅  $key" -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "  ❌  $key" -ForegroundColor Red
         $allGreen = $false
     }
@@ -360,7 +378,15 @@ foreach ($key in $Results.Keys) {
 Write-Host "$('─' * 60)" -ForegroundColor DarkGray
 if ($allGreen) {
     Write-Host "`n  All prerequisites satisfied — ready to build Packer images!`n" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host "`n  One or more prerequisites are missing. Resolve the ❌ items above.`n" -ForegroundColor Red
     exit 1
 }
+
+Write-Host "  💡  Tip: To watch or debug the Packer build in real time, connect to" -ForegroundColor DarkCyan
+Write-Host "       the VM's VNC console. Install a VNC viewer if you don't have one:" -ForegroundColor DarkCyan
+Write-Host "         sudo apt-get install -y vinagre          # GNOME VNC viewer" -ForegroundColor DarkCyan
+Write-Host "         sudo apt-get install -y virt-viewer      # virt-viewer (recommended with libvirt)" -ForegroundColor DarkCyan
+Write-Host "         sudo apt-get install -y tigervnc-viewer  # TigerVNC" -ForegroundColor DarkCyan
+Write-Host "       Then connect to the VNC address shown in the packer build output.`n" -ForegroundColor DarkCyan
