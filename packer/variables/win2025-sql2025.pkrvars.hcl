@@ -5,8 +5,8 @@ os_version  = "2025"
 sql_version = "2025"
 box_name    = "win2025-sql2025"
 
-os_iso_path  = "/root/packer-media/WinServer2025Eval.iso"
-sql_iso_path = "/root/packer-media/SQLServer2025-Dev.iso"
+os_iso_path  = "/opt/packer-media/WinServer2025Eval.iso"
+sql_iso_path = "/opt/packer-media/SQLServer2025-Dev.iso"
 
 os_iso_checksum = ""
 

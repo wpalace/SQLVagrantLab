@@ -16,7 +16,7 @@ global:
   box_library_path: "/opt/vagrant-boxes"
 
   # Path on the HOST machine where ISO media lives (used by Install-Prerequisites.ps1)
-  media_path: "/root/packer-media"
+  media_path: "/opt/packer-media"
 
 regions:
   - name: RegionA
@@ -26,6 +26,7 @@ regions:
       - hostname: dc01
         role: DomainController       # Promotes to AD DS forest root (first DC)
         os_version: "2022"           # "2022" or "2025"
+        sql_version: "2022"          # reuse SQL box; SQL service is disabled at first boot
         static_ip: 192.168.10.10
         cpus: 2
         memory_mb: 2048

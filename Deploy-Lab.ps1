@@ -25,7 +25,7 @@
 param(
     [string]$ConfigPath = (Join-Path $PSScriptRoot 'config.yaml'),
     [ValidateSet('qemu', 'hyperv')]
-    [string]$Provider   = 'qemu'
+    [string]$Provider = 'qemu'
 )
 
 Set-StrictMode -Version Latest
@@ -62,11 +62,11 @@ if (-not (Test-Path $ConfigPath)) {
 
 $raw = Get-Content $ConfigPath -Raw | ConvertFrom-Yaml
 
-$global        = $raw.global
-$domainName    = $global.domain_name    ?? 'test.dev'
-$adminUser     = $global.admin_user     ?? 'admin'
+$global = $raw.global
+$domainName = $global.domain_name ?? 'test.dev'
+$adminUser = $global.admin_user ?? 'admin'
 $adminPassword = $global.admin_password ?? 'P@ssw0rd'
-$boxLibrary    = Resolve-TildePath ($global.box_library_path ?? '~/vagrant-boxes')
+$boxLibrary = Resolve-TildePath ($global.box_library_path ?? '~/vagrant-boxes')
 
 Write-Ok "Domain    : $domainName"
 Write-Ok "Admin user: $adminUser"
@@ -80,16 +80,21 @@ $boxErrors = [System.Collections.Generic.List[string]]::new()
 
 foreach ($region in $raw.regions) {
     foreach ($node in $region.nodes) {
-        $osVer  = $node.os_version.ToString()
-        $sqlVer = ($node.role -eq 'SQLServer') ? $node.sql_version.ToString() : $null
-
-        # Domain Controller nodes use a base OS-only box (no SQL pre-staged)
-        $boxName = ($sqlVer) ? "win${osVer}-sql${sqlVer}" : "win${osVer}-dc"
+        $osVer = $node.os_version.ToString()
+        # All nodes (DC and SQL) now use the SQL-inclusive box image.
+        # DC nodes declare sql_version in config.yaml; the SQL service is
+        # disabled at first boot by Disable-SqlServer.ps1.
+        if (-not $node['sql_version']) {
+            Write-Err "Node '$($node.hostname)' is missing 'sql_version' in config.yaml. All nodes must declare sql_version."
+        }
+        $sqlVer = $node.sql_version.ToString()
+        $boxName = "win${osVer}-sql${sqlVer}"
         $boxPath = Join-Path $boxLibrary "${boxName}.box"
 
         if (-not (Test-Path $boxPath)) {
             $boxErrors.Add("MISSING box for $($node.hostname): $boxPath")
-        } else {
+        }
+        else {
             Write-Ok "$($node.hostname) -> $boxName"
         }
         # Attach box info to node for use in generation
@@ -115,7 +120,8 @@ if ($Provider -eq 'qemu') {
     if ($plugins -notmatch 'vagrant-qemu') {
         Write-Host '  Installing vagrant-qemu...'
         & vagrant plugin install vagrant-qemu
-    } else {
+    }
+    else {
         Write-Ok 'vagrant-qemu installed'
     }
 }
@@ -125,57 +131,79 @@ if ($Provider -eq 'qemu') {
 Write-Step 'Building topology model...'
 
 # Identify the first DomainController node (forest root)
-$allNodes  = $raw.regions | ForEach-Object { $_.nodes }
-$forestDC  = $allNodes | Where-Object { $_.role -eq 'DomainController' } | Select-Object -First 1
+$allNodes = $raw.regions | ForEach-Object { $_.nodes }
+$forestDC = $allNodes | Where-Object { $_.role -eq 'DomainController' } | Select-Object -First 1
 $forestDcIp = $forestDC.static_ip
 
 Write-Ok "Forest DC : $($forestDC.hostname) @ $forestDcIp"
 
-$regions = foreach ($region in $raw.regions) {
-    $network   = $region.network   # e.g. 192.168.10.0/24
-    $prefix    = $network.Split('/')[1]
-    $baseIp    = $network.Split('/')[0]
-    $octets    = $baseIp.Split('.') | ForEach-Object { [int]$_ }
-    $gateway   = "$($octets[0]).$($octets[1]).$($octets[2]).1"
-    # Compute netmask from prefix length
-    $mask      = ([System.Net.IPAddress]([uint32]::MaxValue -shl (32 - [int]$prefix) -band [uint32]::MaxValue)).GetAddressBytes() | ForEach-Object { $_ } | Join-String -Separator '.'
+$regions = & {
+    # SSH ports: 50022, 50023, ... — one unique port per VM across all regions
+    $nodeIndex = 0
+    foreach ($region in $raw.regions) {
+        $network = $region.network   # e.g. 192.168.10.0/24
+        $prefix = $network.Split('/')[1]
+        $baseIp = $network.Split('/')[0]
+        $octets = $baseIp.Split('.') | ForEach-Object { [int]$_ }
+        $gateway = "$($octets[0]).$($octets[1]).$($octets[2]).1"
+        # Compute netmask from prefix length
+        $mask = ([System.Net.IPAddress]([uint32]::MaxValue -shl (32 - [int]$prefix) -band [uint32]::MaxValue)).GetAddressBytes() | ForEach-Object { $_ } | Join-String -Separator '.'
 
-    $nodes = foreach ($node in $region.nodes) {
-        $dcMode = if ($node.role -eq 'DomainController') {
-            if ($node.static_ip -eq $forestDcIp) { 'Forest' } else { 'Replica' }
-        } else { '' }
+        # @() ensures a single-node region stays a JSON array (not a bare object)
+        $nodes = @(foreach ($node in $region.nodes) {
+                $dcMode = if ($node.role -eq 'DomainController') {
+                    if ($node.static_ip -eq $forestDcIp) { 'Forest' } else { 'Replica' }
+                }
+                else { '' }
+
+                [ordered]@{
+                    hostname   = $node.hostname
+                    role       = $node.role
+                    static_ip  = $node.static_ip
+                    box_name   = $node['_box_name']
+                    box_path   = $node['_box_path']
+                    cpus       = $node.cpus ?? 2
+                    memory_mb  = $node.memory_mb ?? 2048
+                    dns_server = $forestDcIp
+                    dc_mode    = $dcMode
+                    primary    = ($node.static_ip -eq $forestDcIp).ToString().ToLower()
+                    ssh_port   = 50022 + $nodeIndex
+                }
+                $nodeIndex++
+            })
 
         [ordered]@{
-            hostname     = $node.hostname
-            role         = $node.role
-            static_ip    = $node.static_ip
-            box_name     = $node['_box_name']
-            box_path     = $node['_box_path']
-            cpus         = $node.cpus         ?? 2
-            memory_mb    = $node.memory_mb    ?? 2048
-            dns_server   = $forestDcIp
-            dc_mode      = $dcMode
-            primary      = ($node.static_ip -eq $forestDcIp).ToString().ToLower()
+            name          = $region.name
+            network       = $network
+            netmask       = $mask
+            prefix_length = $prefix
+            gateway       = $gateway
+            nodes         = $nodes
         }
-    }
-
-    [ordered]@{
-        name          = $region.name
-        network       = $network
-        netmask       = $mask
-        prefix_length = $prefix
-        gateway       = $gateway
-        nodes         = $nodes
-    }
-}
+    } # end foreach region
+} # end & scriptblock
 
 # ── 5. Render Vagrantfile from ERB template ───────────────────────────────────
 
 Write-Step 'Generating Vagrantfile...'
 
-$erbPath     = Join-Path $PSScriptRoot 'vagrant/Vagrantfile.erb'
+$erbPath = Join-Path $PSScriptRoot 'vagrant/Vagrantfile.erb'
 $vagrantPath = Join-Path $PSScriptRoot 'Vagrantfile'
-$providerLib = "lib/provider_$Provider"
+$providerLib = "vagrant/lib/provider_$Provider"
+
+# Resolve Ruby binary — prefer Vagrant's embedded Ruby (works even when PATH
+# is stripped by sudo), fall back to system ruby if present.
+$vagrantRuby = '/opt/vagrant/embedded/bin/ruby'
+$rubyBin = if (Test-Path $vagrantRuby) {
+    $vagrantRuby
+}
+elseif ($systemRuby = (Get-Command ruby -ErrorAction SilentlyContinue)?.Source) {
+    $systemRuby
+}
+else {
+    Write-Err 'Ruby not found. Vagrant embedded Ruby expected at /opt/vagrant/embedded/bin/ruby.'
+}
+Write-Verbose "Using Ruby: $rubyBin"
 
 # Use Ruby to render the ERB template (Ruby is bundled with Vagrant)
 $rubyScript = @"
@@ -202,22 +230,24 @@ print result
 "@
 
 $templateData = [ordered]@{
-    config_path   = $ConfigPath
-    provider_lib  = $providerLib
-    domain_name   = $domainName
-    admin_user    = $adminUser
+    config_path    = $ConfigPath
+    provider_lib   = $providerLib
+    domain_name    = $domainName
+    admin_user     = $adminUser
     admin_password = $adminPassword
-    forest_dc_ip  = $forestDcIp
-    regions       = $regions
+    forest_dc_ip   = $forestDcIp
+    # @() ensures a single-region config stays a JSON array (not a bare object)
+    regions        = @($regions)
 } | ConvertTo-Json -Depth 10
 
-$vagrantContent = $templateData | & ruby -e $rubyScript
+$vagrantContent = $templateData | & $rubyBin -e $rubyScript
 if ($LASTEXITCODE -ne 0) { throw 'ERB rendering failed' }
 
 if ($PSCmdlet.ShouldProcess($vagrantPath, 'Write Vagrantfile')) {
     Set-Content -Path $vagrantPath -Value $vagrantContent -Encoding Utf8
     Write-Ok "Vagrantfile written: $vagrantPath"
-} else {
+}
+else {
     Write-Host "`n--- Vagrantfile preview ---`n" -ForegroundColor Yellow
     Write-Host $vagrantContent
     Write-Host "`n--- End preview ---`n" -ForegroundColor Yellow
@@ -244,10 +274,11 @@ Write-Host "$('─' * 60)`n" -ForegroundColor DarkGray
 # ── 7. Execute vagrant up ─────────────────────────────────────────────────────
 
 if (-not $WhatIfPreference) {
-    Write-Step "Running: vagrant up --provider=$Provider"
-    & vagrant up --provider=$Provider
+    Write-Step "Running: vagrant up --provider=$Provider --no-parallel"
+    & vagrant up --provider=$Provider --no-parallel
     if ($LASTEXITCODE -ne 0) { throw "vagrant up failed with exit code $LASTEXITCODE" }
     Write-Host "`n  Lab is up! Use 'vagrant ssh <hostname>' to connect.`n" -ForegroundColor Green
-} else {
+}
+else {
     Write-Host '  [-WhatIf] vagrant up skipped.' -ForegroundColor Yellow
 }
