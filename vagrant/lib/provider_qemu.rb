@@ -19,10 +19,15 @@ def configure_provider(machine, opts)
     # Use QCOW2 disk (copy-on-write, efficient for throwaway lab VMs)
     qe.image_type = "qcow2"
 
-    # Machine type: q35 gives PCIe, AHCI, and better Windows support
-    qe.machine     = "q35"
+    # Explicitly set qemu_dir to avoid vagrant-qemu defaulting to macOS path
+    qe.qemu_dir = "/usr/share/qemu"
+
+    # Machine type: Use 'pc' to match the Packer build architecture (q35 crashes Windows HAL)
+    qe.machine     = "pc"
     qe.arch        = "x86_64"
     qe.cpu_model   = "host"   # Pass through host CPU for best performance
+    qe.net_device  = "e1000e" # Intel Gigabit NIC is natively supported by Windows
+    qe.drive_interface = "ide" # Ah, SATA is unsupported on if=, use IDE directly
 
     # Enable KVM hardware virtualisation (requires kvm kernel module)
     qe.extra_qemu_args = %w[-enable-kvm]
