@@ -126,6 +126,20 @@ if ($Provider -eq 'qemu') {
     }
 }
 
+# ── 3b. Ensure vagrant-reload plugin ─────────────────────────────────────────
+# vagrant-reload provides the `type: "reload"` provisioner used to reboot
+# Windows VMs safely (avoids the SSH-channel reboot issue with reboot:true).
+
+Write-Step 'Checking vagrant-reload plugin...'
+$plugins = & vagrant plugin list 2>&1
+if ($plugins -notmatch 'vagrant-reload') {
+    Write-Host '  Installing vagrant-reload...'
+    & vagrant plugin install vagrant-reload
+}
+else {
+    Write-Ok 'vagrant-reload installed'
+}
+
 # ── 4. Build template data model ──────────────────────────────────────────────
 
 Write-Step 'Building topology model...'
@@ -168,6 +182,7 @@ $regions = & {
                     dc_mode    = $dcMode
                     primary    = ($node.static_ip -eq $forestDcIp).ToString().ToLower()
                     ssh_port   = 50022 + $nodeIndex
+                    winrm_port = 55985 + $nodeIndex   # WinRM HTTP port forwarded per-VM
                 }
                 $nodeIndex++
             })
