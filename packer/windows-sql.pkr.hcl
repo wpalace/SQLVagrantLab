@@ -172,7 +172,20 @@ build {
     elevated_execute_command  = "powershell -ExecutionPolicy Bypass -Command \". {{.Vars}}; & 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' -NoLogo -NoProfile -ExecutionPolicy Bypass -File '{{.Path}}'; exit $LASTEXITCODE\""
   }
 
-  # ── Step 2: SQL Server PrepareImage (stages binaries, no hostname binding) ───
+  # ── Step 2: Install SetupComplete.cmd to re-configure WinRM after Sysprep ─────
+  # Sysprep resets WinRM to an unconfigured/Manual-startup state. We install a
+  # SetupComplete.cmd before Sysprep runs. Windows executes this file exactly
+  # once after Sysprep/OOBE — when Vagrant first boots the box — re-enabling
+  # WinRM so Vagrant's communicator can connect.
+  # Requires elevation to write to C:\Windows\Setup\Scripts\.
+  provisioner "powershell" {
+    script = "${path.root}/scripts/configure-winrm-runtime.ps1"
+    elevated_user             = "vagrant"
+    elevated_password         = "vagrant"
+    elevated_execute_command  = "powershell -ExecutionPolicy Bypass -Command \". {{.Vars}}; & 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' -NoLogo -NoProfile -ExecutionPolicy Bypass -File '{{.Path}}'; exit $LASTEXITCODE\""
+  }
+
+  # ── Step 3: SQL Server PrepareImage (stages binaries, no hostname binding) ───
   # Same elevation requirement as Step 1 — SQL Server setup.exe also requires
   # a fully elevated token.
   provisioner "powershell" {

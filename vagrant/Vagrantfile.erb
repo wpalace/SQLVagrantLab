@@ -10,20 +10,20 @@
 Vagrant.configure("2") do |config|
 
   # ── Communicator: WinRM for provisioning ─────────────────────────────────────
-  # Vagrant's SSH communicator uses POSIX 'mkdir -p' internally before every
-  # provisioner, which Windows PowerShell rejects. WinRM is Vagrant's native
-  # Windows provisioning path and uses WS-Management / PowerShell remoting.
+  # WinRM is Vagrant's native Windows provisioning path. The Packer box keeps
+  # WinRM running at all times (configured by configure-winrm-runtime.ps1 via
+  # SetupComplete.cmd on first boot after Sysprep) and OpenSSH for manual SSH.
   config.vm.guest        = :windows
   config.vm.communicator = "winrm"
   config.winrm.username  = "vagrant"
   config.winrm.password  = "vagrant"
-  config.winrm.timeout   = 600
-  config.winrm.retry_limit = 20
-  config.winrm.retry_delay = 10
-  config.vm.boot_timeout = 600
+  config.winrm.transport   = :plaintext
+  config.winrm.timeout      = 1800
+  config.winrm.retry_limit  = 120   # Windows first boot after Sysprep takes 8-15+ min;
+  config.winrm.retry_delay  = 10    # 120 x 10s = 20 min of retries within boot_timeout
+  config.vm.boot_timeout    = 1800  # 30 min overall boot window
 
-  # ── SSH settings kept for manual 'vagrant ssh' / manual access ───────────────
-  # These are NOT used for provisioner execution (WinRM handles that).
+  # ── SSH credentials (for 'vagrant ssh' / manual access) ──────────────────────
   config.ssh.username   = "vagrant"
   config.ssh.password   = "vagrant"
   config.ssh.insert_key = false
@@ -89,10 +89,8 @@ Vagrant.configure("2") do |config|
       ]
     end
 
-    # Vagrant SSH port (for manual vagrant ssh)
+    # Vagrant SSH port (for 'vagrant ssh' and provisioner communication)
     machine.ssh.port   = <%= node[:ssh_port] %>
-    # Vagrant WinRM port (for provisioner communication through QEMU hostfwd)
-    machine.winrm.port = <%= node[:winrm_port] %>
 
     # ── Static IP via private network (ignored by QEMU provider; Set-StaticIP.ps1
     #    configures the NIC inside the guest) ─────────────────────────────────

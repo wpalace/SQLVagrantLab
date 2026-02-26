@@ -10,8 +10,10 @@
     key, sets PowerShell 7 as the default SSH shell, and opens TCP 22 in the
     Windows Firewall.
 
-    After Sysprep + box deployment, 'vagrant ssh' will use OpenSSH for all
-    connections — no WinRM required at runtime.
+    SSH (OpenSSH) is the RUNTIME communicator for Vagrant — WinRM is only used
+    during the Packer build phase. After Sysprep + box deployment, 'vagrant ssh'
+    connects using the vagrant/vagrant credentials (password auth) until Vagrant
+    replaces the insecure key with a machine-specific one on first boot.
 
 .ENVIRONMENT
     VAGRANT_KEY_URL   URL to fetch the Vagrant insecure public key from.
@@ -34,7 +36,8 @@ $cap = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*'
 if ($cap.State -ne 'Installed') {
     Add-WindowsCapability -Online -Name $cap.Name | Out-Null
     Write-Host '    Installed OpenSSH.Server'
-} else {
+}
+else {
     Write-Host '    OpenSSH.Server already installed'
 }
 
@@ -61,7 +64,8 @@ $authKeys = Join-Path $sshDir 'authorized_keys'
 
 try {
     $pubKey = (Invoke-WebRequest -Uri $vagrantKeyUrl -UseBasicParsing).Content.Trim()
-} catch {
+}
+catch {
     # Fallback: hard-code the well-known Vagrant insecure key in case the build
     # environment has no internet access at image-build time.
     Write-Warning "Could not fetch key from $vagrantKeyUrl — using embedded fallback"
@@ -92,7 +96,8 @@ if ($pwsh) {
         -PropertyType String `
         -Force | Out-Null
     Write-Host "    DefaultShell => $pwsh"
-} else {
+}
+else {
     Write-Warning 'pwsh not found — SSH shell will default to cmd.exe. Install PowerShell 7 before building.'
 }
 
@@ -111,7 +116,8 @@ if (-not (Get-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue)) {
         -Action      Allow `
         -LocalPort   22 | Out-Null
     Write-Host '    Firewall rule created'
-} else {
+}
+else {
     Write-Host '    Firewall rule already exists'
 }
 
@@ -124,6 +130,7 @@ $settings = @(
     'PubkeyAuthentication yes'
     'PasswordAuthentication yes'     # Vagrant needs this before key exchange
     'PermitRootLogin no'
+    'MaxAuthTries 6'                 # Allow Vagrant's multi-attempt key negotiation
     'AuthorizedKeysFile .ssh/authorized_keys'
     'Subsystem sftp sftp-server.exe'
 )
@@ -133,7 +140,8 @@ foreach ($line in $settings) {
     $key = $line.Split(' ')[0]
     if ($content -match "(?m)^#?\s*$key\s") {
         $content = $content -replace "(?m)^#?\s*$key\s.*", $line
-    } else {
+    }
+    else {
         $content += "`n$line"
     }
 }

@@ -99,7 +99,7 @@ sudo vagrant up --provider=qemu
 If `vagrant up` hangs at the SSH prompt, simply open a new terminal tab and connect manually over the loopback adapter:
 
 ```bash
-ssh -p 50022 vagrant@127.0.0.1
+ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 50022 vagrant@localhost
 ```
 *Password: `vagrant`*
 

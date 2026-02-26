@@ -2,16 +2,16 @@
 <!--
   Autounattend.xml for Windows Server 2022 Evaluation (Standard Desktop Experience)
   Used during Packer QEMU build phase.
-  
+
   Key behaviors:
   - Selects Windows Server 2022 Standard Evaluation (Desktop Experience)
   - Creates local Administrator account (password: vagrant)
   - Creates local vagrant account (password: vagrant) with admin rights
-  - Enables WinRM for Packer communicator
-  - Disables Windows Firewall during setup
-  - Auto-runs SetupComplete.cmd from the floppy to enable WinRM
-
-  WinRM is enabled only for the Packer build. At runtime, SSH (OpenSSH) is used.
+  - Two-phase WinRM bootstrap in FirstLogonCommands:
+      Phase 1 (inline): disable firewall, set ExecutionPolicy, winrm quickconfig
+      Phase 2 (floppy): a:\enable-winrm.ps1 applies auth hardening and restarts service
+  - Packer uses WinRM ONLY during the build phase.
+  - At runtime, Vagrant connects via SSH (OpenSSH), configured by configure-openssh.ps1.
 -->
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
 
@@ -179,12 +179,39 @@
         </LocalAccounts>
       </UserAccounts>
 
-      <!-- Run WinRM setup + Packer scripts at first logon -->
+      <!-- Two-phase WinRM bootstrap:
+           Phase 1 (inline) gets WinRM up fast so Phase 2 floppy script can run in PS.
+           Phase 2 (floppy) applies auth hardening via enable-winrm.ps1. -->
       <FirstLogonCommands>
+        <!-- 1. Disable firewall so WinRM traffic is never blocked during build -->
         <SynchronousCommand wcm:action="add"
                             xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Order>1</Order>
-          <Description>Enable WinRM</Description>
+          <Description>Disable Windows Firewall</Description>
+          <CommandLine>cmd.exe /c netsh advfirewall set allprofiles state off</CommandLine>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+        <!-- 2. Unlock script execution before any PowerShell runs -->
+        <SynchronousCommand wcm:action="add"
+                            xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>2</Order>
+          <Description>Set PowerShell ExecutionPolicy to Bypass</Description>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -Command "Set-ExecutionPolicy Bypass -Scope LocalMachine -Force"</CommandLine>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+        <!-- 3. Inline quickconfig: brings WinRM up with basic auth before the floppy script runs -->
+        <SynchronousCommand wcm:action="add"
+                            xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>3</Order>
+          <Description>WinRM quickconfig inline</Description>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -Command "winrm quickconfig -q; winrm set winrm/config '@{MaxTimeoutms=7200000}'; winrm set winrm/config/winrs '@{MaxMemoryPerShellMB=2048}'; winrm set winrm/config/service '@{AllowUnencrypted=true}'; winrm set winrm/config/service/auth '@{Basic=true}'; Set-Service WinRM -StartupType Automatic; Restart-Service WinRM"</CommandLine>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+        <!-- 4. Floppy script: adds explicit firewall rule and does a clean service restart -->
+        <SynchronousCommand wcm:action="add"
+                            xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>4</Order>
+          <Description>Enable WinRM (floppy hardening script)</Description>
           <CommandLine>cmd.exe /c powershell -ExecutionPolicy Bypass -File a:\enable-winrm.ps1</CommandLine>
           <RequiresUserInput>false</RequiresUserInput>
         </SynchronousCommand>

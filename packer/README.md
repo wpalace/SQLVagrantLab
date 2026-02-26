@@ -52,6 +52,33 @@ sudo chown -R $USER:$USER /opt/vagrant-boxes
 
 ---
 
+## Communicator Strategy
+
+The build uses **two different communicators** for two different phases:
+
+| Phase | Communicator | Configured by |
+|---|---|---|
+| **Packer build** | WinRM (port 5985) | `Autounattend.xml` + `enable-winrm.ps1` |
+| **Vagrant runtime** | SSH / OpenSSH (port 22) | `configure-openssh.ps1` provisioner |
+
+### WinRM (Build Phase)
+WinRM is bootstrapped in two steps from `Autounattend.xml` `FirstLogonCommands`:
+
+1. **Inline quickconfig** — disables firewall, sets `ExecutionPolicy Bypass`, runs `winrm quickconfig` with basic auth and unencrypted traffic enabled, restarts the service.
+2. **Floppy script** (`a:\enable-winrm.ps1`) — re-applies auth settings, adds explicit TCP 5985 firewall rule, and does a final clean restart.
+
+This two-phase approach ensures WinRM is listening before Packer's timeout window and the service is correctly hardened before provisioners run.
+
+### SSH (Runtime Phase)
+The `configure-openssh.ps1` provisioner (Step 1 in the build) installs OpenSSH Server, seeds the Vagrant insecure public key to `C:\Users\vagrant\.ssh\authorized_keys`, and configures `sshd` with:
+- `PasswordAuthentication yes` — lets `vagrant ssh` connect with `vagrant/vagrant` before Vagrant replaces the insecure key
+- `PubkeyAuthentication yes` — allows the standard Vagrant SSH key flow
+- `MaxAuthTries 6` — accommodates Vagrant's multi-attempt key negotiation
+
+After Sysprep and box packaging, `vagrant_box_template.rb` declares `config.vm.communicator = "ssh"` so all Vagrant operations use SSH, **not** WinRM.
+
+---
+
 ## Troubleshooting & "Gotchas"
 
 ### 1. QEMU and Custom Drives (`qemuargs`)

@@ -1,7 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Autounattend.xml for Windows Server 2025 Evaluation (Standard Desktop Experience)
-  Identical structure to win2022 Autounattend.xml; the only difference is the image name.
+
+  Key behaviors:
+  - Selects Windows Server 2025 Standard Evaluation
+  - Creates local Administrator account (password: vagrant)
+  - Creates local vagrant account (password: vagrant) with admin rights
+  - Two-phase WinRM bootstrap in FirstLogonCommands:
+      Phase 1 (inline): disable firewall, set ExecutionPolicy, winrm quickconfig
+      Phase 2 (floppy): a:\enable-winrm.ps1 applies auth hardening and restarts service
+  - Packer uses WinRM ONLY during the build phase.
+  - At runtime, Vagrant connects via SSH (OpenSSH), configured by configure-openssh.ps1.
 -->
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
 
@@ -176,10 +185,20 @@
           <CommandLine>powershell.exe -ExecutionPolicy Bypass -Command "winrm quickconfig -q; winrm set winrm/config '@{MaxTimeoutms=7200000}'; winrm set winrm/config/winrs '@{MaxMemoryPerShellMB=2048}'; winrm set winrm/config/service '@{AllowUnencrypted=true}'; winrm set winrm/config/service/auth '@{Basic=true}'; Set-Service WinRM -StartupType Automatic; Restart-Service WinRM"</CommandLine>
           <RequiresUserInput>false</RequiresUserInput>
         </SynchronousCommand>
+        <!-- 4. Explicit WinRM firewall rule (belt-and-suspenders with firewall off above) -->
         <SynchronousCommand wcm:action="add"
                             xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Order>4</Order>
+          <Description>WinRM firewall rule</Description>
           <CommandLine>cmd.exe /c netsh advfirewall firewall add rule name="WinRM" protocol=TCP dir=in localport=5985 action=allow</CommandLine>
+          <RequiresUserInput>false</RequiresUserInput>
+        </SynchronousCommand>
+        <!-- 5. Floppy script: final auth hardening and clean service restart -->
+        <SynchronousCommand wcm:action="add"
+                            xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+          <Order>5</Order>
+          <Description>Enable WinRM (floppy hardening script)</Description>
+          <CommandLine>cmd.exe /c powershell -ExecutionPolicy Bypass -File a:\enable-winrm.ps1</CommandLine>
           <RequiresUserInput>false</RequiresUserInput>
         </SynchronousCommand>
       </FirstLogonCommands>
