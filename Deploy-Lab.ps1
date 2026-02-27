@@ -112,33 +112,7 @@ if ($boxErrors.Count -gt 0) {
     throw 'Missing box files — aborting.'
 }
 
-# ── 3. Ensure vagrant-qemu plugin ────────────────────────────────────────────
 
-if ($Provider -eq 'qemu') {
-    Write-Step 'Checking vagrant-qemu plugin...'
-    $plugins = & vagrant plugin list 2>&1
-    if ($plugins -notmatch 'vagrant-qemu') {
-        Write-Host '  Installing vagrant-qemu...'
-        & vagrant plugin install vagrant-qemu
-    }
-    else {
-        Write-Ok 'vagrant-qemu installed'
-    }
-}
-
-# ── 3b. Ensure vagrant-reload plugin ─────────────────────────────────────────
-# vagrant-reload provides the `type: "reload"` provisioner used to reboot
-# Windows VMs safely (avoids the SSH-channel reboot issue with reboot:true).
-
-Write-Step 'Checking vagrant-reload plugin...'
-$plugins = & vagrant plugin list 2>&1
-if ($plugins -notmatch 'vagrant-reload') {
-    Write-Host '  Installing vagrant-reload...'
-    & vagrant plugin install vagrant-reload
-}
-else {
-    Write-Ok 'vagrant-reload installed'
-}
 
 # ── 4. Build template data model ──────────────────────────────────────────────
 
@@ -289,10 +263,69 @@ Write-Host "$('─' * 60)`n" -ForegroundColor DarkGray
 # ── 7. Execute vagrant up ─────────────────────────────────────────────────────
 
 if (-not $WhatIfPreference) {
-    Write-Step "Running: vagrant up --provider=$Provider --no-parallel"
-    & vagrant up --provider=$Provider --no-parallel
-    if ($LASTEXITCODE -ne 0) { throw "vagrant up failed with exit code $LASTEXITCODE" }
-    Write-Host "`n  Lab is up! Use 'vagrant ssh <hostname>' to connect.`n" -ForegroundColor Green
+    Write-Step "Starting background WinRM workaround job..."
+    $sshPorts = @()
+    foreach ($r in $regions) { foreach ($n in $r.nodes) { $sshPorts += $n.ssh_port } }
+    
+    $logFile = Join-Path $PWD 'WinRM-SSH-Workaround.log'
+    Write-Step "Logging background SSH task to $logFile"
+
+    $WinRMJob = Start-Job -ScriptBlock {
+        param([string]$PortsStr, [string]$LogFile)
+        [int[]]$Ports = $PortsStr -split ',' | Where-Object { $_ -ne '' }
+        $resolved = @{}
+        $maxRetries = 200 # Roughly ~33 minutes of trying per port
+        $attempts = @{}
+
+        Add-Content -Path $LogFile -Value "`n$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ====== STARTED BACKGROUND SSH JOB FOR PORTS: $($Ports -join ',') ======"
+
+        while ($resolved.Count -lt $Ports.Count) {
+            Start-Sleep -Seconds 10
+            foreach ($port in $Ports) {
+                if (-not $attempts.ContainsKey($port)) { $attempts[$port] = 0 }
+                if (-not $resolved.ContainsKey($port) -and $attempts[$port] -lt $maxRetries) {
+                    $attempts[$port]++
+                    $cmdTxt = 'powershell.exe -Command "New-ItemProperty -Path ''HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'' -Name LocalAccountTokenFilterPolicy -Value 1 -PropertyType DWORD -Force; Restart-Service WinRM"'
+                    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+                    Add-Content -Path $LogFile -Value "[$ts] Attempting SSH on port $port (Attempt $($attempts[$port])/$maxRetries)..."
+                    
+                    try {
+                        # Capture verbose SSH output (stderr and stdout combined) along with command execution
+                        $sshpassCmd = "sshpass -p 'vagrant' ssh -v -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -p $port vagrant@localhost $cmdTxt"
+                        Add-Content -Path $LogFile -Value "[$ts] Executing: $sshpassCmd"
+                        
+                        $output = Invoke-Expression "$sshpassCmd 2>&1"
+                        $exitCode = $LASTEXITCODE
+                        
+                        $outputStr = [string]($output -join "`n")
+                        Add-Content -Path $LogFile -Value "[$ts] (Port $port) Exit Code: $exitCode`nOutput:`n$outputStr"
+                        
+                        # SSH can return 0 sometimes if it failed to resolve or connect in weird scenarios, so we ensure it succeeded.
+                        if ($exitCode -eq 0 -and $outputStr -notmatch "Connection refused" -and $outputStr -notmatch "Connection timed out") {
+                            $resolved[$port] = $true
+                            Add-Content -Path $LogFile -Value "[$ts] ---> WINRM FIX SUCCESSFULLY APPLIED FOR PORT $port <---"
+                        }
+                    }
+                    catch {
+                        Add-Content -Path $LogFile -Value "[$ts] (Port $port) Internal script error: $_"
+                    }
+                }
+            }
+        }
+        Add-Content -Path $LogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ====== ALL SSH TASKS COMPLETED. EXITING ====== `n"
+    } -ArgumentList ($sshPorts -join ','), $logFile
+
+    try {
+        Write-Step "Running: vagrant up --provider=$Provider --no-parallel"
+        & vagrant up --provider=$Provider --no-parallel
+        if ($LASTEXITCODE -ne 0) { throw "vagrant up failed with exit code $LASTEXITCODE" }
+        Write-Host "`n  Lab is up! Use 'vagrant ssh <hostname>' to connect.`n" -ForegroundColor Green
+    }
+    finally {
+        Write-Verbose "Stopping WinRM background job..."
+        Stop-Job $WinRMJob -ErrorAction SilentlyContinue
+        Remove-Job $WinRMJob -ErrorAction SilentlyContinue
+    }
 }
 else {
     Write-Host '  [-WhatIf] vagrant up skipped.' -ForegroundColor Yellow

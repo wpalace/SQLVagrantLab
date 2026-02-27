@@ -196,12 +196,12 @@ $useApt = $distro -in @('ubuntu', 'debian')
 Invoke-Step 'Install QEMU + KVM + utilities' {
     if ($useApt) {
         & bash -c 'apt-get update -qq'
-        Install-AptPackage @('qemu-system-x86', 'qemu-utils', 'qemu-kvm', 'libvirt-daemon-system', 'virtinst', 'bridge-utils')
+        Install-AptPackage @('qemu-system-x86', 'qemu-utils', 'qemu-kvm', 'libvirt-daemon-system', 'virtinst', 'bridge-utils', 'sshpass')
         $labUser = $env:SUDO_USER ?? (& bash -c 'logname 2>/dev/null || echo $SUDO_USER')
         if ($labUser) { & bash -c "usermod -aG kvm,libvirt '$labUser'" }
     }
     else {
-        & bash -c 'dnf install -y qemu-kvm qemu-img libvirt libvirt-client virt-install'
+        & bash -c 'dnf install -y qemu-kvm qemu-img libvirt libvirt-client virt-install sshpass'
         & bash -c 'systemctl enable --now libvirtd'
     }
 }
@@ -249,19 +249,28 @@ Invoke-Step 'Install HashiCorp Vagrant' {
 }
 $Results['Vagrant'] = Test-Command 'vagrant'
 
-# ── 5. vagrant-qemu plugin ────────────────────────────────────────────────────
+# ── 5. Vagrant plugins ──────────────────────────────────────────────────────────
 
-Invoke-Step 'Install vagrant-qemu plugin' {
+Invoke-Step 'Install Vagrant plugins (qemu, reload)' {
     if (-not (Test-Command 'vagrant')) { Write-Warn 'vagrant not installed yet — skipping plugin install'; return }
     $plugins = & vagrant plugin list 2>&1
+    
     if ($plugins -notmatch 'vagrant-qemu') {
         & vagrant plugin install vagrant-qemu
     }
     else {
         Write-Ok 'vagrant-qemu already installed'
     }
+
+    if ($plugins -notmatch 'vagrant-reload') {
+        & vagrant plugin install vagrant-reload
+    }
+    else {
+        Write-Ok 'vagrant-reload already installed'
+    }
 }
 $Results['vagrant-qemu'] = (Test-Command 'vagrant') -and ((& vagrant plugin list 2>&1) -match 'vagrant-qemu')
+$Results['vagrant-reload'] = (Test-Command 'vagrant') -and ((& vagrant plugin list 2>&1) -match 'vagrant-reload')
 
 # ── 6. PowerShell 7.5.1 ──────────────────────────────────────────────────────
 

@@ -39,6 +39,8 @@ $ps1Content = @'
 # ConfigureWinRM.ps1 — first boot after Sysprep (runs as SYSTEM via scheduled task).
 # Restores LocalAccountTokenFilterPolicy and ensures WinRM is usable for Vagrant.
 
+Start-Transcript -Path "C:\Windows\Temp\ConfigureWinRM.log" -Append
+
 # Fix Remote UAC: local Administrators group members need this to authenticate
 # over WinRM without the token being filtered down to a restricted token.
 $sysPath = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
@@ -70,6 +72,8 @@ Restart-Service WinRM
 
 # Unregister this task so it only runs once
 Unregister-ScheduledTask -TaskName 'Configure-WinRM-Vagrant' -Confirm:$false -ErrorAction SilentlyContinue
+
+Stop-Transcript
 '@
 
 $ps1Path = Join-Path $SetupScriptsDir 'ConfigureWinRM.ps1'
@@ -88,7 +92,7 @@ $taskTrigger = New-ScheduledTaskTrigger -AtStartup
 
 $taskSettings = New-ScheduledTaskSettingsSet `
   -ExecutionTimeLimit (New-TimeSpan -Minutes 15) `
-  -StartWhenAvailable $true
+  -StartWhenAvailable
 
 $taskPrincipal = New-ScheduledTaskPrincipal `
   -UserId    'SYSTEM' `

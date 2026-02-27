@@ -14,12 +14,18 @@ Before deploying, ensure the following are installed and configured on the host:
 |---|---|
 | QEMU + KVM | `sudo apt install qemu-system-x86`; user must be in the `kvm` group |
 | Vagrant | `sudo apt install vagrant` or install from [vagrantup.com](https://vagrantup.com) |
+| sshpass | `sudo apt install sshpass` (used for headless VM authentication) |
 | vagrant-qemu plugin | `vagrant plugin install vagrant-qemu` |
 | vagrant-reload plugin | `vagrant plugin install vagrant-reload` |
 | PowerShell 7 (`pwsh`) | Required to run `Deploy-Lab.ps1` |
 | Pre-built `.box` files | Built by Packer — see [`packer/README.md`](packer/README.md) |
 
-The `Install-Prerequisites.ps1` script can help automate these steps on a fresh machine.
+> **Important**: The `Install-Prerequisites.ps1` script will automate the installation of `qemu`, `vagrant`, `pwsh`, and the required Vagrant plugins on a fresh Linux machine. 
+> 
+> ```bash
+> sudo pwsh -File Install-Prerequisites.ps1
+> ```
+> *Note: If you do not run this, you must manually install the `vagrant-qemu` and `vagrant-reload` plugins before continuing.*
 
 ---
 
