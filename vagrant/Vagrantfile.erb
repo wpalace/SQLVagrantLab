@@ -112,9 +112,19 @@ Vagrant.configure("2") do |config|
     #     "<%= node[:dns_server] %>"
     #   ]
 
-    # 2. Rename computer — using inline to bypass file-upload/path issues on Windows SSH
+    # 2. Rename computer & allow ACPI shutdown for vagrant-reload
     machine.vm.provision "Set-Hostname", type: "shell",
-      inline: "Rename-Computer -NewName '<%= node[:hostname] %>' -Force"
+      inline: <<-POWERSHELL
+        # Allow ACPI shut down from lock screen (for vagrant-qemu system_powerdown)
+        New-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name 'shutdownwithoutlogon' -Value 1 -PropertyType DWORD -Force | Out-Null
+        
+        # Disable Shutdown Event Tracker
+        New-Item -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Reliability' -Force -ErrorAction SilentlyContinue | Out-Null
+        New-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Reliability' -Name 'ShutdownReasonOn' -Value 0 -PropertyType DWORD -Force | Out-Null
+        New-ItemProperty -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Reliability' -Name 'ShutdownReasonUI' -Value 0 -PropertyType DWORD -Force | Out-Null
+
+        Rename-Computer -NewName '<%= node[:hostname] %>' -Force
+      POWERSHELL
     machine.vm.provision "reboot-after-rename", type: "reload"
 
 <% if node[:role] == 'DomainController' %>

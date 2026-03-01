@@ -200,7 +200,27 @@ build {
   }
 
   # ── Step 3: Sysprep (generalize image — Packer shuts down the VM after this) ─
-  # Sysprep is invoked at the END of prepare-image.ps1 after SQL binaries land.
+  provisioner "powershell" {
+    inline = [
+      "Write-Host 'Block WinRM on first boot to prevent timing issues with vagrant'",
+      "netsh advfirewall firewall set rule name=\"Windows Remote Management (HTTP-In)\" new action=block | Out-Null",
+      "netsh advfirewall firewall set rule name=\"Windows Remote Management (HTTPS-In)\" new action=block | Out-Null",
+      "Write-Host 'Running Sysprep (generalize + shutdown)...'",
+      "$sysprep = \"$env:SystemRoot\\System32\\Sysprep\\sysprep.exe\"",
+      "$sysprepArgs = '/generalize', '/oobe', '/shutdown', '/quiet'",
+      "Write-Host \"    Executing: $sysprep $($sysprepArgs -join ' ')\"",
+      "# Packer detects the shutdown itself. We must exit 0 so Packer knows the provisioner succeeded.",
+      "Start-Process -FilePath $sysprep -ArgumentList $sysprepArgs -NoNewWindow",
+      "exit 0"
+    ]
+    environment_vars = [
+      "SQL_ISO_DRIVE=E:",     # Second CD-ROM is typically D: or E: on Windows
+      "SQL_VERSION=${var.sql_version}",
+    ]
+    elevated_user             = "vagrant"
+    elevated_password         = "vagrant"
+    elevated_execute_command  = "powershell -ExecutionPolicy Bypass -Command \". {{.Vars}}; & 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' -NoLogo -NoProfile -ExecutionPolicy Bypass -File '{{.Path}}'; exit $LASTEXITCODE\""
+  }
 
   # ── Step 4: Package as a Vagrant .box ────────────────────────────────────────
   post-processor "vagrant" {

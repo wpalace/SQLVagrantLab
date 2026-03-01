@@ -204,7 +204,15 @@
                             xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
           <Order>3</Order>
           <Description>WinRM quickconfig inline</Description>
-          <CommandLine>powershell.exe -ExecutionPolicy Bypass -Command "winrm quickconfig -q; winrm set winrm/config '@{MaxTimeoutms=7200000}'; winrm set winrm/config/winrs '@{MaxMemoryPerShellMB=2048}'; winrm set winrm/config/service '@{AllowUnencrypted=true}'; winrm set winrm/config/service/auth '@{Basic=true}'; Set-Service WinRM -StartupType Automatic; Restart-Service WinRM"</CommandLine>
+          <CommandLine>powershell.exe -ExecutionPolicy Bypass -Command "
+            winrm quickconfig -q;
+            winrm set winrm/config '@{MaxTimeoutms=7200000}';
+            winrm set winrm/config/winrs '@{MaxMemoryPerShellMB=2048}';
+            winrm set winrm/config/service '@{AllowUnencrypted=true}';
+            winrm set winrm/config/service/auth '@{Basic=true}';
+            Set-Service WinRM -StartupType Automatic;
+            Restart-Service WinRM
+          "</CommandLine>
           <RequiresUserInput>false</RequiresUserInput>
         </SynchronousCommand>
         <!-- 4. Floppy script: adds explicit firewall rule and does a clean service restart -->

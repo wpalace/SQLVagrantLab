@@ -70,20 +70,3 @@ if ($proc.ExitCode -ne 0) {
 }
 
 Write-Host '    SQL Server PrepareImage completed successfully' -ForegroundColor Green
-
-# ── 3. Windows Sysprep ────────────────────────────────────────────────────────
-# /generalize  removes machine-specific information (SIDs, etc.)
-# /oobe        sets Windows to run OOBE on next boot (required for Vagrant)
-# /shutdown    powers off after Sysprep — Packer waits for this
-# /quiet       no UI
-
-Write-Step 'Running Sysprep (generalize + shutdown)...'
-
-$sysprep = "$env:SystemRoot\System32\Sysprep\sysprep.exe"
-$sysprepArgs = '/generalize', '/oobe', '/shutdown', '/quiet'
-
-Write-Host "    Executing: $sysprep $($sysprepArgs -join ' ')"
-# Do NOT use Start-Process -Wait here — Packer detects the shutdown itself.
-& $sysprep @sysprepArgs
-
-# Script ends here. The VM will power off; Packer captures it as a .qcow2 image.
