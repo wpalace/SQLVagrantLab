@@ -265,6 +265,37 @@ Write-Host "$('─' * 60)`n" -ForegroundColor DarkGray
 # ── 7. Execute vagrant up (networking + boot only) ───────────────────────────
 
 if (-not $WhatIfPreference) {
+    # ── 7. Pre-flight: verify all SSH ports are free ──────────────────────────────
+    # A rogue QEMU process from a previous run can hold the SSH ports even after
+    # 'vagrant destroy'. If any port is already bound, vagrant up remaps it
+    # silently and the provisioner connects to the wrong (old) VM.  Fail fast here
+    # so the user can kill the process before proceeding.
+    Write-Step 'Pre-flight: checking SSH ports are free...'
+    $allNodes = $regions | ForEach-Object { $_.nodes }
+    $portErrors = @()
+    foreach ($n in $allNodes) {
+        $port = $n.ssh_port
+        # Use ss to check for listeners on this port
+        $ssOutput = & ss -tlnp "sport = :$port" 2>&1
+        $bound = $ssOutput | Where-Object { $_ -match ":$port\b" }
+        if ($bound) {
+            # Extract PID from ss output (format: users:(("qemu...",pid=NNNN,...)))
+            $procId = if ($bound -match 'pid=(\d+)') { $Matches[1] } else { '?' }
+            $portErrors += "  Port $port ($($n.hostname)) is already in use — PID $procId"
+        } else {
+            Write-Ok "  Port $port (${($n.hostname)}) is free"
+        }
+    }
+    if ($portErrors.Count -gt 0) {
+        Write-Host "`n  ❌  Aborting: one or more SSH ports are already bound:" -ForegroundColor Red
+        $portErrors | ForEach-Object { Write-Host $_ -ForegroundColor Red }
+        Write-Host "`n  Kill the stale QEMU process(es) and re-run Deploy-Lab.ps1." -ForegroundColor Yellow
+        Write-Host "  Tip: sudo kill <PID>  or  sudo killall qemu-system-x86_64" -ForegroundColor Yellow
+        throw 'SSH port conflict — aborting before vagrant up'
+    }
+
+    # ── 8. Execute vagrant up (networking + boot only) ───────────────────────────
+
     Write-Step "Running: vagrant up --provider=$Provider --no-parallel"
     & vagrant up --provider=$Provider --no-parallel
     if ($LASTEXITCODE -ne 0) { throw "vagrant up failed with exit code $LASTEXITCODE" }
