@@ -5,7 +5,9 @@
 
 .DESCRIPTION
     Reads config.yaml, validates pre-built Packer .box files exist, generates
-    a Vagrantfile from the ERB template, and runs 'vagrant up'.
+    a Vagrantfile from the ERB template, runs 'vagrant up' (networking + boot
+    only — no Vagrant provisioners), then calls the SSH-based provisioner
+    scripts for each node role in dependency order.
 
 .PARAMETER ConfigPath
     Path to the YAML topology file. Defaults to config.yaml in the script dir.
@@ -260,73 +262,133 @@ foreach ($r in $regions) {
 }
 Write-Host "$('─' * 60)`n" -ForegroundColor DarkGray
 
-# ── 7. Execute vagrant up ─────────────────────────────────────────────────────
+# ── 7. Execute vagrant up (networking + boot only) ───────────────────────────
 
 if (-not $WhatIfPreference) {
-    Write-Step "Starting background WinRM workaround job..."
-    $sshPorts = @()
-    foreach ($r in $regions) { foreach ($n in $r.nodes) { $sshPorts += $n.ssh_port } }
-    
-    $logFile = Join-Path $PWD 'WinRM-SSH-Workaround.log'
-    Write-Step "Logging background SSH task to $logFile"
+    Write-Step "Running: vagrant up --provider=$Provider --no-parallel"
+    & vagrant up --provider=$Provider --no-parallel
+    if ($LASTEXITCODE -ne 0) { throw "vagrant up failed with exit code $LASTEXITCODE" }
+    Write-Ok 'All VMs are up and reachable via SSH'
 
-    $WinRMJob = Start-Job -ScriptBlock {
-        param([string]$PortsStr, [string]$LogFile)
-        [int[]]$Ports = $PortsStr -split ',' | Where-Object { $_ -ne '' }
-        $resolved = @{}
-        $maxRetries = 200 # Roughly ~33 minutes of trying per port
-        $attempts = @{}
+    # ── 8. SSH-based provisioning (DC nodes first, in topology order) ─────────
+    #
+    # Vagrant has NO provisioners. All guest configuration is performed here
+    # by calling Provision-DomainController.ps1 (and future role scripts) over
+    # SSH using sshpass. Forest DCs must be provisioned before Replica DCs.
 
-        Add-Content -Path $LogFile -Value "`n$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ====== STARTED BACKGROUND SSH JOB FOR PORTS: $($Ports -join ',') ======"
+    $provisionerScript = Join-Path $PSScriptRoot 'scripts\Provision-DomainController.ps1'
+    $provisionersDir   = Join-Path $PSScriptRoot 'provisioners'
 
-        while ($resolved.Count -lt $Ports.Count) {
-            Start-Sleep -Seconds 10
-            foreach ($port in $Ports) {
-                if (-not $attempts.ContainsKey($port)) { $attempts[$port] = 0 }
-                if (-not $resolved.ContainsKey($port) -and $attempts[$port] -lt $maxRetries) {
-                    $attempts[$port]++
-                    $cmdTxt = 'powershell.exe -Command "New-ItemProperty -Path ''HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'' -Name LocalAccountTokenFilterPolicy -Value 1 -PropertyType DWORD -Force; Restart-Service WinRM"'
-                    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-                    Add-Content -Path $LogFile -Value "[$ts] Attempting SSH on port $port (Attempt $($attempts[$port])/$maxRetries)..."
-                    
-                    try {
-                        # Capture verbose SSH output (stderr and stdout combined) along with command execution
-                        $sshpassCmd = "sshpass -p 'vagrant' ssh -v -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5 -p $port vagrant@localhost $cmdTxt"
-                        Add-Content -Path $LogFile -Value "[$ts] Executing: $sshpassCmd"
-                        
-                        $output = Invoke-Expression "$sshpassCmd 2>&1"
-                        $exitCode = $LASTEXITCODE
-                        
-                        $outputStr = [string]($output -join "`n")
-                        Add-Content -Path $LogFile -Value "[$ts] (Port $port) Exit Code: $exitCode`nOutput:`n$outputStr"
-                        
-                        # SSH can return 0 sometimes if it failed to resolve or connect in weird scenarios, so we ensure it succeeded.
-                        if ($exitCode -eq 0 -and $outputStr -notmatch "Connection refused" -and $outputStr -notmatch "Connection timed out") {
-                            $resolved[$port] = $true
-                            Add-Content -Path $LogFile -Value "[$ts] ---> WINRM FIX SUCCESSFULLY APPLIED FOR PORT $port <---"
-                        }
-                    }
-                    catch {
-                        Add-Content -Path $LogFile -Value "[$ts] (Port $port) Internal script error: $_"
-                    }
+    # Gather DC nodes in topology order (forest root first, replicas after)
+    $dcNodes = foreach ($r in $regions) {
+        foreach ($n in $r.nodes) {
+            if ($n.role -eq 'DomainController') {
+                [pscustomobject]@{
+                    Region = $r
+                    Node   = $n
                 }
             }
         }
-        Add-Content -Path $LogFile -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ====== ALL SSH TASKS COMPLETED. EXITING ====== `n"
-    } -ArgumentList ($sshPorts -join ','), $logFile
+    }
+    # Stable sort: Forest before Replica
+    $dcNodes = $dcNodes | Sort-Object { if ($_.Node.dc_mode -eq 'Forest') { 0 } else { 1 } }
 
-    try {
-        Write-Step "Running: vagrant up --provider=$Provider --no-parallel"
-        & vagrant up --provider=$Provider --no-parallel
-        if ($LASTEXITCODE -ne 0) { throw "vagrant up failed with exit code $LASTEXITCODE" }
-        Write-Host "`n  Lab is up! Use 'vagrant ssh <hostname>' to connect.`n" -ForegroundColor Green
+    foreach ($entry in $dcNodes) {
+        $r = $entry.Region
+        $n = $entry.Node
+
+        Write-Step "Provisioning DC: $($n.hostname) [$($n.dc_mode)] on SSH port $($n.ssh_port)"
+
+        $provArgs = @{
+            FilePath     = 'pwsh'
+            ArgumentList = @(
+                '-File', $provisionerScript,
+                '-Hostname',        $n.hostname,
+                '-SshPort',         $n.ssh_port,
+                '-StaticIP',        $n.static_ip,
+                '-PrefixLength',    $r.prefix_length,
+                '-Gateway',         $r.gateway,
+                '-DnsServer',       $n.dns_server,
+                '-DomainName',      $domainName,
+                '-AdminUser',       $adminUser,
+                '-AdminPassword',   $adminPassword,
+                '-DcMode',          $n.dc_mode,
+                '-ProvisionersDir', $provisionersDir
+            )
+            NoNewWindow  = $true
+            PassThru     = $true
+            Wait         = $true
+        }
+
+        $proc = Start-Process @provArgs
+        if ($proc.ExitCode -ne 0) {
+            throw "Provisioning failed for $($n.hostname) (exit $($proc.ExitCode))"
+        }
+
+        Write-Ok "$($n.hostname) provisioning complete"
     }
-    finally {
-        Write-Verbose "Stopping WinRM background job..."
-        Stop-Job $WinRMJob -ErrorAction SilentlyContinue
-        Remove-Job $WinRMJob -ErrorAction SilentlyContinue
+
+    Write-Host ''
+    Write-Host ("-" * 60) -ForegroundColor DarkGray
+    Write-Host '  All Domain Controllers provisioned.' -ForegroundColor Cyan
+    Write-Host ("-" * 60) -ForegroundColor DarkGray
+    Write-Host ''
+
+    # ── 9. SSH-based provisioning — SQL Server nodes ──────────────────────────
+    #
+    # Runs after all DC nodes are fully provisioned (domain is live).
+    # Each SQL node: rename → static IP → domain join → CompleteImage → dbatools.
+
+    $sqlScript = Join-Path $PSScriptRoot 'scripts\Provision-SqlServer.ps1'
+
+    $sqlNodes = foreach ($r in $regions) {
+        foreach ($n in $r.nodes) {
+            if ($n.role -eq 'SQLServer') {
+                [pscustomobject]@{ Region = $r; Node = $n }
+            }
+        }
     }
+
+    foreach ($entry in $sqlNodes) {
+        $r = $entry.Region
+        $n = $entry.Node
+
+        Write-Step "Provisioning SQL: $($n.hostname) on SSH port $($n.ssh_port)"
+
+        $sqlArgs = @{
+            FilePath     = 'pwsh'
+            ArgumentList = @(
+                '-File', $sqlScript,
+                '-Hostname',        $n.hostname,
+                '-SshPort',         $n.ssh_port,
+                '-StaticIP',        $n.static_ip,
+                '-PrefixLength',    $r.prefix_length,
+                '-Gateway',         $r.gateway,
+                '-DcIpAddress',     $n.dns_server,   # dns_server == forest DC IP
+                '-DomainName',      $domainName,
+                '-AdminUser',       $adminUser,
+                '-AdminPassword',   $adminPassword,
+                '-ProvisionersDir', $provisionersDir
+            )
+            NoNewWindow  = $true
+            PassThru     = $true
+            Wait         = $true
+        }
+
+        $proc = Start-Process @sqlArgs
+        if ($proc.ExitCode -ne 0) {
+            throw "SQL provisioning failed for $($n.hostname) (exit $($proc.ExitCode))"
+        }
+        Write-Ok "$($n.hostname) provisioning complete"
+    }
+
+    Write-Host ''
+    Write-Host ("-" * 60) -ForegroundColor DarkGray
+    Write-Host '  Lab deployment complete!' -ForegroundColor Green
+    Write-Host "  Use 'vagrant ssh <hostname>' to connect." -ForegroundColor Green
+    Write-Host ("-" * 60) -ForegroundColor DarkGray
+    Write-Host ''
 }
 else {
-    Write-Host '  [-WhatIf] vagrant up skipped.' -ForegroundColor Yellow
+    Write-Host '  [-WhatIf] vagrant up and provisioning skipped.' -ForegroundColor Yellow
 }

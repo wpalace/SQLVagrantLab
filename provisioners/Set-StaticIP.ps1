@@ -1,4 +1,3 @@
-#Requires -Version 7.0
 <#
 .SYNOPSIS
     Assigns a static IP address to the lab NIC on a Windows Server VM.

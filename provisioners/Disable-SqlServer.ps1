@@ -1,4 +1,3 @@
-#Requires -Version 7.0
 <#
 .SYNOPSIS
     Stops and disables the SQL Server service on Domain Controller nodes.

@@ -1,4 +1,3 @@
-#Requires -Version 7.0
 <#
 .SYNOPSIS
     Runs SQL Server /ACTION=CompleteImage to finalize the pre-staged instance.

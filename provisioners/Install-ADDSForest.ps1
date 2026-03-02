@@ -1,4 +1,3 @@
-#Requires -Version 7.0
 <#
 .SYNOPSIS
     Promotes the server to a Domain Controller.
@@ -29,6 +28,15 @@ $ErrorActionPreference = 'Stop'
 
 Write-Host "==> [Install-ADDSForest] Mode=$Mode Domain=$DomainName" -ForegroundColor Cyan
 
+# ── Idempotency: skip if already a DC ────────────────────────────────────────
+# DomainRole: 0=Standalone WS, 1=Member WS, 2=Standalone Srv, 3=Member Srv,
+#             4=Backup DC, 5=Primary DC
+$role = (Get-WmiObject Win32_ComputerSystem).DomainRole
+if ($role -ge 4) {
+    Write-Host "  Already a Domain Controller (role=$role) -- skipping promotion." -ForegroundColor Yellow
+    exit 0
+}
+
 $secPassword = ConvertTo-SecureString $AdminPassword -AsPlainText -Force
 
 # ── Install Windows Features ──────────────────────────────────────────────────
@@ -41,15 +49,15 @@ Import-Module ADDSDeployment
 
 if ($Mode -eq 'Forest') {
     Write-Host "  Creating new AD forest: $DomainName"
-    Install-ADDSForest `
-        -DomainName                    $DomainName `
-        -DomainNetBiosName             ($DomainName.Split('.')[0].ToUpper()) `
-        -ForestMode                    'WinThreshold' `
-        -DomainMode                    'WinThreshold' `
-        -SafeModeAdministratorPassword $secPassword `
-        -InstallDns                    `
-        -NoRebootOnCompletion          `
-        -Force
+    $forestParams = @{
+        DomainName                    = $DomainName
+        DomainNetBiosName             = ($DomainName.Split('.')[0].ToUpper())
+        SafeModeAdministratorPassword = $secPassword
+        InstallDns                    = $true
+        NoRebootOnCompletion          = $true
+        Force                         = $true
+    }
+    Install-ADDSForest @forestParams
 } else {
     Write-Host "  Joining $DomainName as replica DC..."
     # Wait for the forest DC to be reachable before promoting
@@ -62,13 +70,15 @@ if ($Mode -eq 'Forest') {
     $credential = New-Object System.Management.Automation.PSCredential(
         "$($DomainName.Split('.')[0].ToUpper())\Administrator", $secPassword)
 
-    Install-ADDSDomainController `
-        -DomainName                    $DomainName `
-        -SafeModeAdministratorPassword $secPassword `
-        -Credential                    $credential `
-        -InstallDns                    `
-        -NoRebootOnCompletion          `
-        -Force
+    $replicaParams = @{
+        DomainName                    = $DomainName
+        SafeModeAdministratorPassword = $secPassword
+        Credential                    = $credential
+        InstallDns                    = $true
+        NoRebootOnCompletion          = $true
+        Force                         = $true
+    }
+    Install-ADDSDomainController @replicaParams
 }
 
 Write-Host "  ✅  DC promotion complete. Vagrant will reboot now." -ForegroundColor Green
