@@ -2,6 +2,32 @@
 
 This directory contains the Packer configuration for building Windows Server Vagrant boxes pre-installed with SQL Server Developer Edition.
 
+## Architecture
+
+```mermaid
+flowchart TD
+    WinISO([Windows Server ISO])
+    SQLISO([SQL Server ISO])
+
+    subgraph PackerEngine [Packer Engine]
+        direction TB
+        Step1[Installs Windows]
+        Step2[Sets up SSH]
+        Step3[Partially installs SQL Server]
+        Step4[sysprep to templatize Windows w/ SQL]
+        
+        Step1 --> Step2
+        Step2 --> Step3
+        Step3 --> Step4
+    end
+
+    VNC[/VNC Viewer/] -. "Optional: Watch Build" .-> PackerEngine
+
+    WinISO --> Step1
+    SQLISO --> Step1
+    Step4 --> Output[Vagrant Box Image]
+```
+
 ## Prerequisites
 
 1. **Packer Plugins**: Ensure the QEMU and Vagrant plugins are installed:

@@ -4,7 +4,35 @@ A turnkey lab environment that provisions **Windows Server virtual machines pre-
 
 The lab topology is defined in a single [`config.yaml`](config.yaml) file. Running one command builds the full environment: Active Directory domain controller + SQL Server node, joined to the domain with SQL Server configured and ready for use.
 
+## Lab Deployment Architecture
+
+```mermaid
+flowchart TD
+    A[1. Install Prerequisites<br/><code>Install-Prerequisites.ps1</code>] --> B[2. Desired State Config<br/>Packer builds & <code>config.yaml</code>]
+    B --> C[3. Deploy VMs<br/><code>Deploy-Lab.ps1</code> - Boot & Network]
+    
+    C --> D
+    
+    subgraph D [4. Provisioning Phase]
+        direction TB
+        DC[Domain Controller Provisioning<br/>Executes First] --> Fork(Wait for Domain to turn online)
+        Fork --> SQL1[SQL VM 01<br/>Parallel Provisioning]
+        Fork --> SQL2[SQL VM 02<br/>Parallel Provisioning]
+        Fork --> SQLN[SQL VM n<br/>Parallel Provisioning]
+    end
+    
+    SQL1 --> G((Lab Ready))
+    SQL2 --> G
+    SQLN --> G
+
+    classDef primary fill:#2563eb,stroke:#1e3a8a,stroke-width:2px,color:#fff;
+    classDef parallel fill:#059669,stroke:#064e3b,stroke-width:2px,color:#fff;
+    class DC primary;
+    class SQL1,SQL2,SQLN parallel;
+```
+
 ---
+
 
 ## Prerequisites
 
