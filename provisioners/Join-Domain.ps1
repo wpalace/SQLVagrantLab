@@ -71,3 +71,4 @@ $cred      = New-Object System.Management.Automation.PSCredential("$netbios\$Adm
 
 Add-Computer -DomainName $DomainName -Credential $cred -Force
 Write-Host "  ✅  Joined $DomainName. Vagrant will reboot now." -ForegroundColor Green
+exit 2

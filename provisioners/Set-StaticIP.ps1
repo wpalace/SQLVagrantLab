@@ -61,6 +61,12 @@ if (-not $labAdapter) {
 
 Write-Host "  Adapter: $($labAdapter.Name) [$($labAdapter.InterfaceDescription)]"
 
+$existingIP = Get-NetIPAddress -InterfaceIndex $labAdapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object IPAddress -eq $StaticIP
+if ($existingIP) {
+    Write-Host "  ✅  Static IP $StaticIP is already assigned to $($labAdapter.Name) — skipping." -ForegroundColor Green
+    exit 0
+}
+
 # ── Launch the rest of the configuration asynchronously ─────────────────────────
 # Removing the DHCP address and applying the static IP will severe the SSH session.
 # If we do it synchronously, the SSH client (sshpass) will receive a Broken Pipe
@@ -115,6 +121,7 @@ $TaskName = 'ApplyLabStaticIP'
 Register-ScheduledTask -TaskName $TaskName -Action $Action -Principal $Principal -Trigger $Trigger -Force | Out-Null
 Start-ScheduledTask -TaskName $TaskName
 Write-Host "  ✅  Static IP $StaticIP/$PrefixLength assignment launched via Scheduled Task" -ForegroundColor Green
+exit 2
 
 
 # ── Set network profile to Private ────────────────────────────────────────────

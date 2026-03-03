@@ -35,14 +35,14 @@ regions:
         role: SQLServer
         os_version: "2022"
         sql_version: "2022"          # "2022" or "2025" — always Developer Edition
-        static_ip: 10.0.50.20
+        static_ip: 10.0.50.20        # SQL hosts must have an IP ending in .20-.29
         cpus: 4
         memory_mb: 4096
 
-#  - name: RegionB
+  - name: RegionB
 #    # Bridge: br1 (10.0.51.1 on host). Uncomment region and run Deploy-Lab.ps1 to activate.
-#    network: 10.0.51.0/24
-#    nodes:
+    network: 10.0.51.0/24
+    nodes:
 #      - hostname: dc02
 #        role: DomainController       # Replica DC — joins existing forest
 #        os_version: "2025"
@@ -50,10 +50,10 @@ regions:
 #        cpus: 2
 #        memory_mb: 2048
 #
-#      - hostname: sql02
-#        role: SQLServer
-#        os_version: "2025"
-#        sql_version: "2025"
-#        static_ip: 10.0.51.20
-#        cpus: 4
-#        memory_mb: 4096
+      - hostname: sql05
+        role: SQLServer
+        os_version: "2022"
+        sql_version: "2022"
+        static_ip: 10.0.51.20
+        cpus: 4
+        memory_mb: 4096

@@ -82,3 +82,4 @@ if ($Mode -eq 'Forest') {
 }
 
 Write-Host "  ✅  DC promotion complete. Vagrant will reboot now." -ForegroundColor Green
+exit 2

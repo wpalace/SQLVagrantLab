@@ -99,7 +99,7 @@ regions:
         role: SQLServer
         os_version: "2022"
         sql_version: "2022"
-        static_ip: 10.0.50.20
+        static_ip: 10.0.50.20        # SQL hosts must have an IP ending in .20-.29
         cpus: 4
         memory_mb: 4096
 ```
@@ -161,7 +161,7 @@ dc01: Warning: Authentication failure. Retrying...
 
 **Do not stop `vagrant up`.** Open a second terminal and SSH into the VM:
 ```bash
-ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 50022 vagrant@localhost
+sshpass -p vagrant ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null vagrant@10.0.50.20
 ```
 *Password: `vagrant`*
 

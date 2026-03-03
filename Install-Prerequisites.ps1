@@ -321,8 +321,33 @@ dhcp-range=interface:br1,10.0.51.100,10.0.51.254,24h
 
 # Static DHCP reservations (MAC address -> IP)
 # These MACs are generated deterministically in Deploy-Lab.ps1
+# Domain Controllers (10-19)
 dhcp-host=52:54:0a:00:32:0a,10.0.50.10,dc01
-dhcp-host=52:54:0a:00:32:14,10.0.50.20,sql01
+dhcp-host=52:54:0a:00:33:0a,10.0.51.10,dc02
+
+# Region A (br0) SQL hosts (20-29)
+dhcp-host=52:54:0a:00:32:14,10.0.50.20
+dhcp-host=52:54:0a:00:32:15,10.0.50.21
+dhcp-host=52:54:0a:00:32:16,10.0.50.22
+dhcp-host=52:54:0a:00:32:17,10.0.50.23
+dhcp-host=52:54:0a:00:32:18,10.0.50.24
+dhcp-host=52:54:0a:00:32:19,10.0.50.25
+dhcp-host=52:54:0a:00:32:1a,10.0.50.26
+dhcp-host=52:54:0a:00:32:1b,10.0.50.27
+dhcp-host=52:54:0a:00:32:1c,10.0.50.28
+dhcp-host=52:54:0a:00:32:1d,10.0.50.29
+
+# Region B (br1) SQL hosts (20-29)
+dhcp-host=52:54:0a:00:33:14,10.0.51.20
+dhcp-host=52:54:0a:00:33:15,10.0.51.21
+dhcp-host=52:54:0a:00:33:16,10.0.51.22
+dhcp-host=52:54:0a:00:33:17,10.0.51.23
+dhcp-host=52:54:0a:00:33:18,10.0.51.24
+dhcp-host=52:54:0a:00:33:19,10.0.51.25
+dhcp-host=52:54:0a:00:33:1a,10.0.51.26
+dhcp-host=52:54:0a:00:33:1b,10.0.51.27
+dhcp-host=52:54:0a:00:33:1c,10.0.51.28
+dhcp-host=52:54:0a:00:33:1d,10.0.51.29
 "@ | Set-Content $dnsmasqConfFile -Encoding Utf8
 
     & bash -c 'systemctl restart dnsmasq || systemctl enable --now dnsmasq'
@@ -438,14 +463,24 @@ $Results['powershell-yaml'] = $null -ne (Get-Module -ListAvailable -Name powersh
 
 # ── 8. dbatools module ────────────────────────────────────────────────────────
 
-Invoke-Step 'Install dbatools PS module' {
+Invoke-Step 'Download dbatools PS module for VMs' {
+    $installsDir = Join-Path $PSScriptRoot 'data' 'installs'
+    if (-not (Test-Path $installsDir)) { New-Item -ItemType Directory -Path $installsDir -Force | Out-Null }
+    
     $mod = Get-Module -ListAvailable -Name dbatools
     if (-not $mod) {
-        Write-Host "  Installing dbatools..."
+        Write-Host "  Installing dbatools on host..."
         Install-Module -Name dbatools -Scope CurrentUser -Force -AllowClobber
     }
-    else {
-        Write-Ok "dbatools $($mod.Version) already installed"
+    
+    $dbatoolsDest = Join-Path $installsDir 'dbatools'
+    if (-not (Test-Path $dbatoolsDest)) {
+        Write-Host "  Downloading dbatools and dependencies for VMs..."
+        Save-Module -Name dbatools -Path $installsDir -Force
+        Save-Module -Name dbatools.library -Path $installsDir -Force
+        Write-Ok "dbatools saved to $dbatoolsDest"
+    } else {
+        Write-Ok "dbatools already saved in data/installs"
     }
 }
 $Results['dbatools'] = $null -ne (Get-Module -ListAvailable -Name dbatools)

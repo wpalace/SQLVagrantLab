@@ -181,7 +181,39 @@ $regions = & {
     } # end foreach region
 } # end & scriptblock
 
-# ── 5. Render Vagrantfile from ERB template ───────────────────────────────────
+# ── 5. Remove orphaned Vagrant nodes ──────────────────────────────────────────
+
+Write-Step 'Checking for removed VMs...'
+$configuredHosts = $allNodes | Select-Object -ExpandProperty hostname
+$vagrantDir = Join-Path $PSScriptRoot '.vagrant/machines'
+if (Test-Path $vagrantDir) {
+    $existingMachines = Get-ChildItem -Path $vagrantDir -Directory | Select-Object -ExpandProperty Name
+    $orphans = $existingMachines | Where-Object { $_ -notin $configuredHosts }
+    
+    foreach ($orphan in $orphans) {
+        Write-Host "  🗑️  Orphaned VM detected: $orphan. Destroying..." -ForegroundColor Yellow
+        
+        # We run destroy *before* the Vagrantfile is regenerated so Vagrant still knows about it
+        & vagrant destroy $orphan -f
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  ⚠️  Failed to cleanly destroy $orphan. Forcibly cleaning Vagrant state..." -ForegroundColor Red
+        } else {
+            Write-Ok "Cleanly destroyed $orphan"
+        }
+        
+        $orphanDir = Join-Path $vagrantDir $orphan
+        if (Test-Path $orphanDir) {
+            Remove-Item -Path $orphanDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    if (@($orphans).Count -eq 0) {
+        Write-Ok 'No orphaned VMs found'
+    }
+} else {
+    Write-Ok 'No existing Vagrant state found'
+}
+
+# ── 6. Render Vagrantfile from ERB template ───────────────────────────────────
 
 Write-Step 'Generating Vagrantfile...'
 
@@ -251,7 +283,7 @@ else {
     Write-Host "`n--- End preview ---`n" -ForegroundColor Yellow
 }
 
-# ── 6. Print deployment plan ──────────────────────────────────────────────────
+# ── 7. Print deployment plan ──────────────────────────────────────────────────
 
 Write-Host ''
 Write-Host "$('─' * 60)" -ForegroundColor DarkGray
@@ -269,10 +301,10 @@ foreach ($r in $regions) {
 }
 Write-Host "$('─' * 60)`n" -ForegroundColor DarkGray
 
-# ── 7. Execute vagrant up (networking + boot only) ───────────────────────────
+# ── 8. Execute vagrant up (networking + boot only) ───────────────────────────
 
 if (-not $WhatIfPreference) {
-    # ── 7. Pre-flight: verify bridge IPs are free ──────────────────────────────
+    # ── 8. Pre-flight: verify bridge IPs are free ──────────────────────────────
     # A rogue QEMU process from a previous run can hold the IP even after
     # 'vagrant destroy'. Fail fast here if the IP responds to ping.
     Write-Step 'Pre-flight: checking bridge IPs are free...'
@@ -293,7 +325,7 @@ if (-not $WhatIfPreference) {
         Write-Host "`n  Proceeding anyway..." -ForegroundColor Yellow
     }
 
-    # ── 8. Execute vagrant up (networking + boot only) ───────────────────────────
+    # ── 9. Execute vagrant up (networking + boot only) ───────────────────────────
 
     Write-Step "Running: vagrant up --provider=$Provider --no-parallel"
     & vagrant up --provider=$Provider --no-parallel
@@ -363,7 +395,7 @@ if (-not $WhatIfPreference) {
     Write-Host ("-" * 60) -ForegroundColor DarkGray
     Write-Host ''
 
-    # ── 9. SSH-based provisioning — SQL Server nodes ──────────────────────────
+    # ── 11. SSH-based provisioning — SQL Server nodes ──────────────────────────
     #
     # Runs after all DC nodes are fully provisioned (domain is live).
     # Each SQL node: rename → static IP → domain join → CompleteImage → dbatools.
@@ -378,36 +410,78 @@ if (-not $WhatIfPreference) {
         }
     }
 
+    $logsDir = Join-Path $PSScriptRoot 'logs'
+    if (-not (Test-Path $logsDir)) { New-Item -ItemType Directory -Path $logsDir -Force | Out-Null }
+
+    $sqlProcesses = @()
+
     foreach ($entry in $sqlNodes) {
         $r = $entry.Region
         $n = $entry.Node
 
-        Write-Step "Provisioning SQL: $($n.hostname) at $($n.static_ip)"
+        $logFile = Join-Path $logsDir "provision-$($n.hostname).log"
+        $errFile = Join-Path $logsDir "provision-$($n.hostname).err"
+        Write-Step "Provisioning SQL in background: $($n.hostname) at $($n.static_ip)"
+        Write-Host "  ℹ️   Watch logs: tail -f `"$logFile`" `"$errFile`"" -ForegroundColor Cyan
 
         $sqlArgs = @{
-            FilePath     = 'pwsh'
-            ArgumentList = @(
+            FilePath               = 'pwsh'
+            ArgumentList           = @(
                 '-File', $sqlScript,
                 '-Hostname',        $n.hostname,
                 '-StaticIP',        $n.static_ip,
                 '-PrefixLength',    $r.prefix_length,
                 '-Gateway',         $r.gateway,
-                '-DcIpAddress',     $n.dns_server,   # dns_server == forest DC IP
+                '-DcIpAddress',     $n.dns_server,
                 '-DomainName',      $domainName,
                 '-AdminUser',       $adminUser,
                 '-AdminPassword',   $adminPassword,
                 '-ProvisionersDir', $provisionersDir
             )
-            NoNewWindow  = $true
-            PassThru     = $true
-            Wait         = $true
+            NoNewWindow            = $true
+            PassThru               = $true
+            RedirectStandardOutput = $logFile
+            RedirectStandardError  = $errFile
         }
 
         $proc = Start-Process @sqlArgs
-        if ($proc.ExitCode -ne 0) {
-            throw "SQL provisioning failed for $($n.hostname) (exit $($proc.ExitCode))"
+        $sqlProcesses += [pscustomobject]@{
+            Hostname = $n.hostname
+            Process  = $proc
+            LogFile  = $logFile
         }
-        Write-Ok "$($n.hostname) provisioning complete"
+    }
+
+    if ($sqlProcesses.Count -gt 0) {
+        Write-Host "`n  Waiting for all SQL provisioning processes to complete..." -ForegroundColor Cyan
+
+        $pending = @()
+        $pending += $sqlProcesses
+        $failedNodes = @()
+
+        while ($pending.Count -gt 0) {
+            Start-Sleep -Seconds 5
+            # Traverse array backwards to safely build the new list of remaining processes
+            $stillPending = @()
+            for ($i = 0; $i -lt $pending.Count; $i++) {
+                $p = $pending[$i]
+                if ($p.Process.HasExited) {
+                    if ($p.Process.ExitCode -ne 0) {
+                        Write-Host "    ❌  $($p.Hostname) provisioning failed (exit $($p.Process.ExitCode)). See $($p.LogFile)" -ForegroundColor Red
+                        $failedNodes += $p.Hostname
+                    } else {
+                        Write-Ok "$($p.Hostname) provisioning complete"
+                    }
+                } else {
+                    $stillPending += $p
+                }
+            }
+            $pending = $stillPending
+        }
+
+        if ($failedNodes.Count -gt 0) {
+            throw "SQL provisioning failed for nodes: $($failedNodes -join ', ')"
+        }
     }
 
     Write-Host ''

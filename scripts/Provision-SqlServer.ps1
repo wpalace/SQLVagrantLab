@@ -106,7 +106,7 @@ function Invoke-RemotePS {
     )
     if ($Description) { Write-Info "Remote: $Description" }
     $encoded   = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($Command))
-    $remoteCmd = "powershell.exe -NoProfile -NonInteractive -EncodedCommand $encoded"
+    $remoteCmd = "powershell.exe -NoProfile -NonInteractive -EncodedCommand $encoded; exit `$LASTEXITCODE"
     $proc = Start-Process -FilePath 'sshpass' `
         -ArgumentList (@('-p', $SshPassword, 'ssh') + $SshOpts + @($remoteCmd)) `
         -NoNewWindow -PassThru -Wait
@@ -139,10 +139,9 @@ function Copy-RemoteScript {
         Write-Fail "scp upload failed for $ScriptName (exit $($scpProc.ExitCode))"
     }
 
-    # Execute via pwsh.exe (PowerShell 7 — installed by Packer build).
     # PS7 handles all parameters and UTF-8 source files natively.
     $quotedArgs = ($ScriptArgs | ForEach-Object { "'$_'" }) -join ' '
-    $remoteCmd  = "pwsh.exe -NoProfile -NonInteractive -File `"$guestPath`" $quotedArgs"
+    $remoteCmd  = "pwsh.exe -NoProfile -NonInteractive -File `"$guestPath`" $quotedArgs; exit `$LASTEXITCODE"
     Write-Info "Executing $ScriptName on guest..."
     $execProc = Start-Process -FilePath 'sshpass' `
         -ArgumentList (@('-p', $SshPassword, 'ssh') + $SshOpts + @($remoteCmd)) `
@@ -207,16 +206,23 @@ New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Reliability
 if (`$current -ne '$Hostname') {
     Rename-Computer -NewName '$Hostname' -Force
     Write-Host 'Renamed to $Hostname'
+    exit 2
 } else {
     Write-Host 'Hostname already $Hostname -- skipping rename'
+    exit 0
 }
 "@
 
 $rc = Invoke-RemotePS -Command $renameCmd -Description "Set hostname to $Hostname"
-if ($rc -ne 0) { Write-Fail "Step 1 failed (exit $rc)" }
+if ($rc -eq 2) {
+    Invoke-RebootAndWait -Reason 'hostname rename'
+    Write-Ok 'Hostname set and VM back online'
+} elseif ($rc -ne 0) { 
+    Write-Fail "Step 1 failed (exit $rc)" 
+} else {
+    Write-Ok 'Hostname matched, no reboot needed'
+}
 
-Invoke-RebootAndWait -Reason 'hostname rename'
-Write-Ok 'Hostname set and VM back online'
 
 # ── Step 2: Set static IP + join domain ──────────────────────────────────────
 #
@@ -229,20 +235,28 @@ Write-Step 'Step 2/4 — Set static IP + join domain'
 
 $rc = Copy-RemoteScript -ScriptName 'Set-StaticIP.ps1' `
     -ScriptArgs @($StaticIP, $PrefixLength, $Gateway, $DcIpAddress)
-if ($rc -ne 0) { Write-Fail "Step 2 (Set-StaticIP) failed (exit $rc)" }
 
-Write-Info "Waiting 10s for guest to apply network changes..."
-Start-Sleep -Seconds 10
-Wait-SshReady -Reason 'network interface reset'
+if ($rc -eq 2) {
+    Write-Info "Waiting 10s for guest to apply network changes..."
+    Start-Sleep -Seconds 10
+    Wait-SshReady -Reason 'network interface reset'
+} elseif ($rc -ne 0) {
+    Write-Fail "Step 2 (Set-StaticIP) failed (exit $rc)"
+}
 
 Write-Info "Static IP $StaticIP/$PrefixLength set — lab NIC can now reach the DC"
 
 $rc = Copy-RemoteScript -ScriptName 'Join-Domain.ps1' `
     -ScriptArgs @($DomainName, $DcIpAddress, $AdminUser, $AdminPassword)
-if ($rc -ne 0) { Write-Fail "Step 2 (Join-Domain) failed (exit $rc)" }
 
-Invoke-RebootAndWait -Reason 'domain join'
-Write-Ok "Joined $DomainName and VM back online"
+if ($rc -eq 2) {
+    Invoke-RebootAndWait -Reason 'domain join'
+    Write-Ok "Joined $DomainName and VM back online"
+} elseif ($rc -ne 0) { 
+    Write-Fail "Step 2 (Join-Domain) failed (exit $rc)" 
+} else {
+    Write-Ok "Already joined to $DomainName"
+}
 
 # ── Step 3: Complete SQL Server post-Sysprep ──────────────────────────────────
 
@@ -257,6 +271,44 @@ Write-Ok 'SQL Server CompleteImage finished'
 # ── Step 4: Configure SQL Server with dbatools ────────────────────────────────
 
 Write-Step 'Step 4/4 — Configure SQL Server (dbatools)'
+
+$dbatoolsLocal = Join-Path (Split-Path $ProvisionersDir) 'data\installs\dbatools'
+$dbatoolsLibLocal = Join-Path (Split-Path $ProvisionersDir) 'data\installs\dbatools.library'
+$dbatoolsGuest = "C:\Windows\Temp\dbatools"
+
+if (Test-Path $dbatoolsLocal) {
+    Write-Info "Uploading offline dbatools module to guest..."
+    $scpArgs = @(
+        '-o', 'StrictHostKeyChecking=no',
+        '-o', 'UserKnownHostsFile=/dev/null',
+        '-r', $dbatoolsLocal,
+        "vagrant@${StaticIP}:C:\Windows\Temp\"
+    )
+    $scpProc = Start-Process -FilePath 'sshpass' `
+        -ArgumentList (@('-p', $SshPassword, 'scp') + $scpArgs) `
+        -NoNewWindow -PassThru -Wait
+    if ($scpProc.ExitCode -ne 0) {
+        Write-Fail "scp upload failed for dbatools (exit $($scpProc.ExitCode))"
+    }
+
+    if (Test-Path $dbatoolsLibLocal) {
+        Write-Info "Uploading offline dbatools.library module to guest..."
+        $scpArgsLib = @(
+            '-o', 'StrictHostKeyChecking=no',
+            '-o', 'UserKnownHostsFile=/dev/null',
+            '-r', $dbatoolsLibLocal,
+            "vagrant@${StaticIP}:C:\Windows\Temp\"
+        )
+        $scpProcLib = Start-Process -FilePath 'sshpass' `
+            -ArgumentList (@('-p', $SshPassword, 'scp') + $scpArgsLib) `
+            -NoNewWindow -PassThru -Wait
+        if ($scpProcLib.ExitCode -ne 0) {
+            Write-Fail "scp upload failed for dbatools.library (exit $($scpProcLib.ExitCode))"
+        }
+    }
+} else {
+    Write-Info "Offline dbatools not found at $dbatoolsLocal, skipping upload."
+}
 
 $rc = Copy-RemoteScript -ScriptName 'Configure-SqlServer.ps1' `
     -ScriptArgs @($AdminPassword)

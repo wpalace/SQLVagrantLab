@@ -15,3 +15,7 @@ output-*/
 *.tmp
 *.bak
 .DS_Store
+
+# Data and Logs
+data/
+logs/

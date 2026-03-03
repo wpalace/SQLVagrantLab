@@ -121,7 +121,7 @@ function Invoke-RemotePS {
     # Encode as UTF-16LE base64 — the format powershell.exe -EncodedCommand expects.
     # This avoids all quoting/newline issues when passing complex scripts over SSH.
     $encoded    = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($Command))
-    $remoteCmd  = "powershell.exe -NoProfile -NonInteractive -EncodedCommand $encoded"
+    $remoteCmd  = "powershell.exe -NoProfile -NonInteractive -EncodedCommand $encoded; exit `$LASTEXITCODE"
 
     $proc = Start-Process -FilePath 'sshpass' `
         -ArgumentList (@("-p", $SshPassword, 'ssh') + $SshOpts + @($remoteCmd)) `
@@ -170,7 +170,7 @@ function Copy-RemoteScript {
     }
 
     $quotedArgs = ($ScriptArgs | ForEach-Object { "'$_'" }) -join ' '
-    $remoteCmd  = "$Shell -NoProfile -NonInteractive -File `"$guestPath`" $quotedArgs"
+    $remoteCmd  = "$Shell -NoProfile -NonInteractive -File `"$guestPath`" $quotedArgs; exit `$LASTEXITCODE"
 
     Write-Info "Executing $ScriptName on guest..."
     $execProc = Start-Process -FilePath 'sshpass' `
@@ -268,17 +268,22 @@ New-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Reliability
 if (`$current -ne '$Hostname') {
     Rename-Computer -NewName '$Hostname' -Force
     Write-Host 'Renamed to $Hostname'
+    exit 2
 } else {
     Write-Host 'Hostname already $Hostname -- skipping rename'
+    exit 0
 }
 "@
 
 $rc = Invoke-RemotePS -Command $renameCmd -Description "Set hostname to $Hostname"
-if ($rc -ne 0) { Write-Fail "Step 1 failed (exit $rc)" }
-
-Invoke-RebootAndWait -Reason 'hostname rename'
-
-Write-Ok 'Hostname set and VM back online'
+if ($rc -eq 2) {
+    Invoke-RebootAndWait -Reason 'hostname rename'
+    Write-Ok 'Hostname set and VM back online'
+} elseif ($rc -ne 0) {
+    Write-Fail "Step 1 failed (exit $rc)"
+} else {
+    Write-Ok 'Hostname matched, no reboot needed'
+}
 
 # ── Step 2: Set static IP ───────────────────────────────────────────────────
 
@@ -286,13 +291,17 @@ Write-Step 'Step 2/4 — Set static IP on lab NIC'
 
 $rc = Copy-RemoteScript -ScriptName 'Set-StaticIP.ps1' `
     -ScriptArgs @($StaticIP, $PrefixLength, $Gateway, $DnsServer)
-if ($rc -ne 0) { Write-Fail "Step 2 failed (exit $rc)" }
 
-Write-Info "Waiting 10s for guest to apply network changes..."
-Start-Sleep -Seconds 10
-Wait-SshReady -Reason 'network interface reset'
-
-Write-Ok "Static IP $StaticIP/$PrefixLength set"
+if ($rc -eq 2) {
+    Write-Info "Waiting 10s for guest to apply network changes..."
+    Start-Sleep -Seconds 10
+    Wait-SshReady -Reason 'network interface reset'
+    Write-Ok "Static IP $StaticIP/$PrefixLength set"
+} elseif ($rc -ne 0) {
+    Write-Fail "Step 2 failed (exit $rc)"
+} else {
+    Write-Ok "Static IP $StaticIP/$PrefixLength already assigned"
+}
 
 # ── Step 3: Promote to Domain Controller ─────────────────────────────────
 
@@ -309,11 +318,15 @@ Write-Info "Local Administrator password set"
 $rc = Copy-RemoteScript -ScriptName 'Install-ADDSForest.ps1' `
     -ScriptArgs @($DomainName, $AdminPassword, $DcMode) `
     -Shell 'powershell.exe'   # ADDSDeployment uses CustomPSSnapIn — PS7-only shell cannot load it
-if ($rc -ne 0) { Write-Fail "Step 3 (ADDS promotion) failed (exit $rc)" }
 
-Invoke-RebootAndWait -Reason 'AD DS promotion'
-
-Write-Ok "AD DS promotion complete ($DcMode)"
+if ($rc -eq 2) {
+    Invoke-RebootAndWait -Reason 'AD DS promotion'
+    Write-Ok "AD DS promotion complete ($DcMode)"
+} elseif ($rc -ne 0) { 
+    Write-Fail "Step 3 (ADDS promotion) failed (exit $rc)"
+} else {
+    Write-Ok "Already a Domain Controller ($DcMode)"
+}
 
 # ── Step 4: Create lab admin account (Forest DC only) ───────────────────────
 

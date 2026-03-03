@@ -30,6 +30,16 @@ $ErrorActionPreference = 'Stop'
 
 Write-Host "==> [Complete-SqlImage] Finalising SQL Server instance on $env:COMPUTERNAME" -ForegroundColor Cyan
 
+$sqlService = Get-Service -Name MSSQLSERVER -ErrorAction SilentlyContinue
+if ($sqlService) {
+    Write-Host "  ✅  SQL Server Developer Edition is already installed on $env:COMPUTERNAME." -ForegroundColor Green
+    if ($sqlService.Status -ne 'Running') {
+        Write-Host '  Starting SQL Server service...'
+        Start-Service MSSQLSERVER -Force
+        Start-Sleep 5
+    }
+    exit 0
+}
 # ── Locate setup.exe in the prepared instance ─────────────────────────────────
 # After PrepareImage, SQL bootstrapper lives under Program Files
 

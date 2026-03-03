@@ -26,11 +26,29 @@ $instance = $env:COMPUTERNAME   # Default instance on local machine
 # ── 1. Ensure dbatools is installed ──────────────────────────────────────────
 
 Write-Step 'Checking dbatools...'
-if (-not (Get-Module -ListAvailable -Name dbatools)) {
-    Write-Host '  Installing dbatools (this may take a few minutes)...'
-    # Set TLS 1.2 for older PS Gallery connections
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Install-Module dbatools -Scope AllUsers -Force -AllowClobber
+$dbaLoaded = Get-Module -ListAvailable -Name dbatools
+$libLoaded = Get-Module -ListAvailable -Name dbatools.library
+if (-not $dbaLoaded -or -not $libLoaded) {
+    Write-Host '  Installing dbatools from offline source...'
+    $localSource = "C:\Windows\Temp\dbatools"
+    if (-not (Test-Path $localSource)) {
+        throw "Offline dbatools source not found at $localSource"
+    }
+
+    $modPaths = ($env:PSModulePath -split ';')
+    $sysPath  = $modPaths | Where-Object { $_ -match 'Program Files' } | Select-Object -First 1
+    if (-not $sysPath) { $sysPath = "C:\Program Files\PowerShell\Modules" }
+
+    $targetPath = Join-Path $sysPath 'dbatools'
+    if (-not (Test-Path $targetPath)) { New-Item -ItemType Directory -Path $targetPath -Force | Out-Null }
+    Copy-Item -Path "$localSource\*" -Destination $targetPath -Recurse -Force
+
+    $localLibSource = "C:\Windows\Temp\dbatools.library"
+    if (Test-Path $localLibSource) {
+        $targetLibPath = Join-Path $sysPath 'dbatools.library'
+        if (-not (Test-Path $targetLibPath)) { New-Item -ItemType Directory -Path $targetLibPath -Force | Out-Null }
+        Copy-Item -Path "$localLibSource\*" -Destination $targetLibPath -Recurse -Force
+    }
 }
 Import-Module dbatools -MinimumVersion 2.0.0 -Force
 Write-Ok "dbatools $((Get-Module dbatools).Version)"
@@ -41,14 +59,14 @@ $sqlCred  = New-Object System.Management.Automation.PSCredential('sa', $secPass)
 
 # ── 2. Enable TCP/IP ──────────────────────────────────────────────────────────
 
-Write-Step 'Enabling TCP/IP protocol...'
-Enable-DbaTcpIp -SqlInstance $instance -Credential $sqlCred -Force | Out-Null
-Write-Ok 'TCP/IP enabled on port 1433'
+#Write-Step 'Enabling TCP/IP protocol...'   enabled by default on SQL Server 2022 and later
+#Enable-DbaTcpIp -SqlInstance $instance -Credential $sqlCred -Force | Out-Null
+#Write-Ok 'TCP/IP enabled on port 1433'
 
 # ── 3. Open Firewall Rules ────────────────────────────────────────────────────
 
 Write-Step 'Configuring Windows Firewall rules...'
-Set-DbaFirewallRule -Type AllSqlServices -Action Allow -Force | Out-Null
+New-DbaFirewallRule -SqlInstance $instance -Type Engine, Browser, DAC -Confirm:$false -Force | Out-Null
 Write-Ok 'Firewall rules set (1433 TCP, 1434 UDP SQL Browser, DAC)'
 
 # Enable ICMPv4 (ping) — DC promotion opens this automatically, but plain
@@ -67,9 +85,12 @@ Write-Ok 'ICMPv4 echo (ping) enabled'
 
 # ── 4. Set Max Server Memory ──────────────────────────────────────────────────
 
+Write-Step 'Connecting to instance and trusting certificate...'
+$conn = Connect-DbaInstance -SqlInstance $instance -SqlCredential $sqlCred -TrustServerCertificate
+
 Write-Step 'Setting safe max memory...'
 # Set-DbaMaxMemory automatically calculates a safe limit (leaves 10-15% for OS)
-$memResult = Set-DbaMaxMemory -SqlInstance $instance -SqlCredential $sqlCred
+$memResult = Set-DbaMaxMemory -SqlInstance $conn
 Write-Ok "Max memory set to $($memResult.MaxValue) MB (was $($memResult.PreviousMaxValue) MB)"
 
 # ── 5. Register SPNs ──────────────────────────────────────────────────────────
@@ -77,7 +98,7 @@ Write-Ok "Max memory set to $($memResult.MaxValue) MB (was $($memResult.Previous
 Write-Step 'Checking and registering SPNs...'
 $spnProblems = Test-DbaSpn -ComputerName $env:COMPUTERNAME -EnableException:$false
 if ($spnProblems) {
-    $spnProblems | Register-DbaSpn -EnableException:$false | Out-Null
+    $spnProblems | Set-DbaSpn -EnableException:$false | Out-Null
     Write-Ok "$($spnProblems.Count) SPN(s) registered"
 } else {
     Write-Ok 'SPNs already correct'
