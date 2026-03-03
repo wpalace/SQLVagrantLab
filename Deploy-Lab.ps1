@@ -130,14 +130,17 @@ Write-Ok "Forest DC : $($forestDC.hostname) @ $forestDcIp"
 $regions = & {
     # SSH ports: 50022, 50023, ... — one unique port per VM across all regions
     $nodeIndex = 0
+    $regionIndex = 0
     foreach ($region in $raw.regions) {
         $network = $region.network   # e.g. 192.168.10.0/24
         $prefix = $network.Split('/')[1]
         $baseIp = $network.Split('/')[0]
         $octets = $baseIp.Split('.') | ForEach-Object { [int]$_ }
         $gateway = "$($octets[0]).$($octets[1]).$($octets[2]).1"
-        # Compute netmask from prefix length
-        $mask = ([System.Net.IPAddress]([uint32]::MaxValue -shl (32 - [int]$prefix) -band [uint32]::MaxValue)).GetAddressBytes() | ForEach-Object { $_ } | Join-String -Separator '.'
+        # Compute netmask from prefix length using bitwise shifts (avoids the
+        # IPAddress constructor byte-order reversal on x86 / little-endian hosts).
+        $maskInt = if ([int]$prefix -eq 0) { 0 } else { [uint32]::MaxValue -shl (32 - [int]$prefix) }
+        $mask = "$(($maskInt -shr 24) -band 255).$(($maskInt -shr 16) -band 255).$(($maskInt -shr 8) -band 255).$($maskInt -band 255)"
 
         # @() ensures a single-node region stays a JSON array (not a bare object)
         $nodes = @(foreach ($node in $region.nodes) {
@@ -146,10 +149,14 @@ $regions = & {
                 }
                 else { '' }
 
+                $ipBytes = [System.Net.IPAddress]::Parse($node.static_ip).GetAddressBytes()
+                $mac = "52:54:$($ipBytes[0].ToString('x2')):$($ipBytes[1].ToString('x2')):$($ipBytes[2].ToString('x2')):$($ipBytes[3].ToString('x2'))"
+
                 [ordered]@{
                     hostname   = $node.hostname
                     role       = $node.role
                     static_ip  = $node.static_ip
+                    mac_address= $mac
                     box_name   = $node['_box_name']
                     box_path   = $node['_box_path']
                     cpus       = $node.cpus ?? 2
@@ -157,8 +164,6 @@ $regions = & {
                     dns_server = $forestDcIp
                     dc_mode    = $dcMode
                     primary    = ($node.static_ip -eq $forestDcIp).ToString().ToLower()
-                    ssh_port   = 50022 + $nodeIndex
-                    winrm_port = 55985 + $nodeIndex   # WinRM HTTP port forwarded per-VM
                 }
                 $nodeIndex++
             })
@@ -166,11 +171,13 @@ $regions = & {
         [ordered]@{
             name          = $region.name
             network       = $network
+            bridge        = "br$regionIndex"   # Linux bridge for this region (br0, br1, …)
             netmask       = $mask
             prefix_length = $prefix
             gateway       = $gateway
             nodes         = $nodes
         }
+        $regionIndex++
     } # end foreach region
 } # end & scriptblock
 
@@ -265,33 +272,25 @@ Write-Host "$('─' * 60)`n" -ForegroundColor DarkGray
 # ── 7. Execute vagrant up (networking + boot only) ───────────────────────────
 
 if (-not $WhatIfPreference) {
-    # ── 7. Pre-flight: verify all SSH ports are free ──────────────────────────────
-    # A rogue QEMU process from a previous run can hold the SSH ports even after
-    # 'vagrant destroy'. If any port is already bound, vagrant up remaps it
-    # silently and the provisioner connects to the wrong (old) VM.  Fail fast here
-    # so the user can kill the process before proceeding.
-    Write-Step 'Pre-flight: checking SSH ports are free...'
+    # ── 7. Pre-flight: verify bridge IPs are free ──────────────────────────────
+    # A rogue QEMU process from a previous run can hold the IP even after
+    # 'vagrant destroy'. Fail fast here if the IP responds to ping.
+    Write-Step 'Pre-flight: checking bridge IPs are free...'
     $allNodes = $regions | ForEach-Object { $_.nodes }
-    $portErrors = @()
+    $ipErrors = @()
     foreach ($n in $allNodes) {
-        $port = $n.ssh_port
-        # Use ss to check for listeners on this port
-        $ssOutput = & ss -tlnp "sport = :$port" 2>&1
-        $bound = $ssOutput | Where-Object { $_ -match ":$port\b" }
-        if ($bound) {
-            # Extract PID from ss output (format: users:(("qemu...",pid=NNNN,...)))
-            $procId = if ($bound -match 'pid=(\d+)') { $Matches[1] } else { '?' }
-            $portErrors += "  Port $port ($($n.hostname)) is already in use — PID $procId"
+        $ip = $n.static_ip
+        $ping = Test-Connection -ComputerName $ip -Count 1 -TimeoutSeconds 1 -Quiet -ErrorAction SilentlyContinue
+        if ($ping) {
+            $ipErrors += "  IP $ip ($($n.hostname)) is already responding to ping!"
         } else {
-            Write-Ok "  Port $port (${($n.hostname)}) is free"
+            Write-Ok "  IP $ip ($($n.hostname)) is free"
         }
     }
-    if ($portErrors.Count -gt 0) {
-        Write-Host "`n  ❌  Aborting: one or more SSH ports are already bound:" -ForegroundColor Red
-        $portErrors | ForEach-Object { Write-Host $_ -ForegroundColor Red }
-        Write-Host "`n  Kill the stale QEMU process(es) and re-run Deploy-Lab.ps1." -ForegroundColor Yellow
-        Write-Host "  Tip: sudo kill <PID>  or  sudo killall qemu-system-x86_64" -ForegroundColor Yellow
-        throw 'SSH port conflict — aborting before vagrant up'
+    if ($ipErrors.Count -gt 0) {
+        Write-Host "`n  ⚠️  Warning: one or more IPs are already active:" -ForegroundColor Yellow
+        $ipErrors | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
+        Write-Host "`n  Proceeding anyway..." -ForegroundColor Yellow
     }
 
     # ── 8. Execute vagrant up (networking + boot only) ───────────────────────────
@@ -328,14 +327,13 @@ if (-not $WhatIfPreference) {
         $r = $entry.Region
         $n = $entry.Node
 
-        Write-Step "Provisioning DC: $($n.hostname) [$($n.dc_mode)] on SSH port $($n.ssh_port)"
+        Write-Step "Provisioning DC: $($n.hostname) [$($n.dc_mode)] at $($n.static_ip)"
 
         $provArgs = @{
             FilePath     = 'pwsh'
             ArgumentList = @(
                 '-File', $provisionerScript,
                 '-Hostname',        $n.hostname,
-                '-SshPort',         $n.ssh_port,
                 '-StaticIP',        $n.static_ip,
                 '-PrefixLength',    $r.prefix_length,
                 '-Gateway',         $r.gateway,
@@ -384,14 +382,13 @@ if (-not $WhatIfPreference) {
         $r = $entry.Region
         $n = $entry.Node
 
-        Write-Step "Provisioning SQL: $($n.hostname) on SSH port $($n.ssh_port)"
+        Write-Step "Provisioning SQL: $($n.hostname) at $($n.static_ip)"
 
         $sqlArgs = @{
             FilePath     = 'pwsh'
             ArgumentList = @(
                 '-File', $sqlScript,
                 '-Hostname',        $n.hostname,
-                '-SshPort',         $n.ssh_port,
                 '-StaticIP',        $n.static_ip,
                 '-PrefixLength',    $r.prefix_length,
                 '-Gateway',         $r.gateway,

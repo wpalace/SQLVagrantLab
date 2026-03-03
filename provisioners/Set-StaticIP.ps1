@@ -61,31 +61,96 @@ if (-not $labAdapter) {
 
 Write-Host "  Adapter: $($labAdapter.Name) [$($labAdapter.InterfaceDescription)]"
 
-# ── Remove existing IPv4 config on the lab adapter ────────────────────────────
-Get-NetIPAddress -InterfaceIndex $labAdapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-ForEach-Object { Remove-NetIPAddress -InputObject $_ -Confirm:$false -ErrorAction SilentlyContinue }
+# ── Launch the rest of the configuration asynchronously ─────────────────────────
+# Removing the DHCP address and applying the static IP will severe the SSH session.
+# If we do it synchronously, the SSH client (sshpass) will receive a Broken Pipe
+# and the provisioning orchestrator will fail. We launch a detached background
+# process to apply the changes.
 
-Get-NetRoute -InterfaceIndex $labAdapter.InterfaceIndex -ErrorAction SilentlyContinue |
-ForEach-Object { Remove-NetRoute -InputObject $_ -Confirm:$false -ErrorAction SilentlyContinue }
+$asyncScript = {
+    param($InterfaceIndex, $StaticIP, $PrefixLength, $Gateway, $DnsServer)
+    
+    # Wait a few seconds for the SSH session that launched us to complete and disconnect safely
+    Start-Sleep -Seconds 5
 
-# ── Disable DHCP only if it is currently enabled ──────────────────────────────
-# A freshly added virtual NIC (e.g. QEMU socket NIC) may not be in DHCP mode;
-# calling Set-NetIPInterface -Dhcp Disabled on it throws "The parameter is incorrect".
-$iface = Get-NetIPInterface -InterfaceIndex $labAdapter.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
-if ($iface -and $iface.Dhcp -eq 'Enabled') {
-    Set-NetIPInterface -InterfaceIndex $labAdapter.InterfaceIndex -Dhcp Disabled
+    # Remove existing IPv4 config on the lab adapter
+    Get-NetIPAddress -InterfaceIndex $InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-NetIPAddress -InputObject $_ -Confirm:$false -ErrorAction SilentlyContinue }
+
+    Get-NetRoute -InterfaceIndex $InterfaceIndex -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-NetRoute -InputObject $_ -Confirm:$false -ErrorAction SilentlyContinue }
+
+    # Disable DHCP
+    $iface = Get-NetIPInterface -InterfaceIndex $InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
+    if ($iface -and $iface.Dhcp -eq 'Enabled') {
+        Set-NetIPInterface -InterfaceIndex $InterfaceIndex -Dhcp Disabled
+    }
+
+    # Assign static IP
+    New-NetIPAddress `
+        -InterfaceIndex $InterfaceIndex `
+        -IPAddress      $StaticIP `
+        -PrefixLength   $PrefixLength `
+        -DefaultGateway $Gateway | Out-Null
+
+    # Point DNS at the Domain Controller
+    Set-DnsClientServerAddress `
+        -InterfaceIndex $InterfaceIndex `
+        -ServerAddresses $DnsServer
 }
 
-# ── Assign static IP ──────────────────────────────────────────────────────────
-New-NetIPAddress `
-    -InterfaceIndex $labAdapter.InterfaceIndex `
-    -IPAddress      $StaticIP `
-    -PrefixLength   $PrefixLength `
-    -DefaultGateway $Gateway | Out-Null
+$encodedArgs = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes(
+    "& {$asyncScript} -InterfaceIndex $($labAdapter.InterfaceIndex) -StaticIP '$StaticIP' -PrefixLength $PrefixLength -Gateway '$Gateway' -DnsServer '$DnsServer'"
+))
 
-# ── Point DNS at the Domain Controller ────────────────────────────────────────
-Set-DnsClientServerAddress `
-    -InterfaceIndex $labAdapter.InterfaceIndex `
-    -ServerAddresses $DnsServer
+$wrapperScript = "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encodedArgs"
+$scriptPath = 'C:\Windows\Temp\Apply-StaticIP.ps1'
+Set-Content -Path $scriptPath -Value $wrapperScript -Encoding utf8
 
-Write-Host "  ✅  Static IP $StaticIP/$PrefixLength assigned on $($labAdapter.Name)" -ForegroundColor Green
+$Action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -NoProfile -File `"$scriptPath`""
+$Principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+$Trigger = New-ScheduledTaskTrigger -AtStartup
+$TaskName = 'ApplyLabStaticIP'
+
+Register-ScheduledTask -TaskName $TaskName -Action $Action -Principal $Principal -Trigger $Trigger -Force | Out-Null
+Start-ScheduledTask -TaskName $TaskName
+Write-Host "  ✅  Static IP $StaticIP/$PrefixLength assignment launched via Scheduled Task" -ForegroundColor Green
+
+
+# ── Set network profile to Private ────────────────────────────────────────────
+# Without DHCP or a domain controller responding, Windows classifies the bridge
+# NIC as a "Public" network. The Public firewall profile blocks ALL inbound and
+# most outbound traffic, including ICMP and SMB — which breaks domain join and
+# VM-to-VM communication. Force it to Private so the Domain firewall profile
+# takes over once the VM joins the domain.
+$netProfile = Get-NetConnectionProfile -InterfaceIndex $labAdapter.InterfaceIndex -ErrorAction SilentlyContinue
+if ($netProfile -and $netProfile.NetworkCategory -ne 'DomainAuthenticated') {
+    try {
+        Set-NetConnectionProfile -InterfaceIndex $labAdapter.InterfaceIndex -NetworkCategory Private -ErrorAction Stop
+        Write-Host "  OK  Network profile set to Private on $($labAdapter.Name)" -ForegroundColor Green
+    } catch {
+        # PermissionDenied can occur when already DomainAuthenticated or Group Policy
+        # prevents the change. Both states are fine for lab connectivity.
+        Write-Host "  OK  Network profile is '$($netProfile.NetworkCategory)' -- no change needed" -ForegroundColor DarkGray
+    }
+} elseif ($netProfile) {
+    Write-Host "  OK  Network profile is '$($netProfile.NetworkCategory)' -- no change needed" -ForegroundColor DarkGray
+} else {
+    Write-Host "  WARNING: Could not read network profile -- skipping category change" -ForegroundColor Yellow
+}
+
+# ── Allow ICMPv4 echo (ping) through all firewall profiles ────────────────────
+# The built-in ICMPv4 Echo rule (FPS-ICMP4-ERQ-In) is scoped to the Domain
+# profile by default. VMs are Private-profiled until domain join completes, so
+# we must widen it to Any to allow pings during and after provisioning.
+$icmpRules = Get-NetFirewallRule -Name 'FPS-ICMP4-ERQ-In' -ErrorAction SilentlyContinue
+if ($icmpRules) {
+    $icmpRules | Set-NetFirewallRule -Profile Any -Enabled True
+    Write-Host "  OK  ICMPv4 Echo rule enabled (Profile: Any)" -ForegroundColor Green
+} else {
+    # Fallback: create a permissive ICMP allow rule
+    New-NetFirewallRule -DisplayName "Lab-Allow-ICMPv4-In" `
+        -Direction Inbound -Protocol ICMPv4 -IcmpType 8 `
+        -Action Allow -Profile Any -ErrorAction SilentlyContinue | Out-Null
+    Write-Host "  OK  ICMPv4 Echo allow rule created (Profile: Any)" -ForegroundColor Green
+}

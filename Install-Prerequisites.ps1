@@ -207,6 +207,134 @@ Invoke-Step 'Install QEMU + KVM + utilities' {
 }
 $Results['QEMU'] = Test-Command 'qemu-system-x86_64'
 
+# ── 2b. Configure lab network bridges ─────────────────────────────────────────
+# Creates br0 (RegionA: 10.0.50.1/24) and br1 (RegionB: 10.0.51.1/24).
+# Both bridges are created now even if RegionB is not yet active, so they
+# are ready when the second region is enabled in config.yaml.
+
+$LabBridges = @(
+    @{ Name = 'br0'; HostIp = '10.0.50.1'; Prefix = '24'; Region = 'RegionA' }
+    @{ Name = 'br1'; HostIp = '10.0.51.1'; Prefix = '24'; Region = 'RegionB' }
+)
+
+Invoke-Step 'Configure lab network bridges (br0 = RegionA, br1 = RegionB)' {
+    # ── Netplan persistence (Ubuntu/Debian with systemd-networkd or NetworkManager) ──
+    $netplanDir = '/etc/netplan'
+    if ($useApt -and (Test-Path $netplanDir)) {
+        $netplanFile = "$netplanDir/60-lab-bridges.yaml"
+        if (-not (Test-Path $netplanFile)) {
+            Write-Host '  Writing netplan config for lab bridges...'
+            $bridgeEntries = ($LabBridges | ForEach-Object {
+                @"
+    $($_.Name):
+      interfaces: []
+      addresses:
+        - $($_.HostIp)/$($_.Prefix)
+      dhcp4: false
+      dhcp6: false
+"@
+            }) -join "`n"
+            @"
+network:
+  version: 2
+  bridges:
+$bridgeEntries
+"@ | Set-Content $netplanFile -Encoding Utf8
+            & bash -c 'netplan apply' 2>&1 | Write-Host
+        }
+        else {
+            Write-Host "  Netplan config already exists: $netplanFile"
+        }
+    }
+
+    # ── Bring bridges up immediately (idempotent — safe to re-run) ───────────
+    foreach ($br in $LabBridges) {
+        $exists = (& bash -c "ip link show '$($br.Name)' 2>/dev/null; echo $?").Trim()
+        if ($exists -eq '0') {
+            Write-Host "  $($br.Name) already exists — skipping creation"
+        }
+        else {
+            Write-Host "  Creating $($br.Name) ($($br.Region): $($br.HostIp)/$($br.Prefix))..."
+            & bash -c "ip link add name '$($br.Name)' type bridge"
+            & bash -c "ip addr add '$($br.HostIp)/$($br.Prefix)' dev '$($br.Name)'"
+            & bash -c "ip link set '$($br.Name)' up"
+        }
+    }
+
+    # ── /etc/qemu/bridge.conf — allow QEMU to attach TAP devices ─────────────
+    $qemuConfDir  = '/etc/qemu'
+    $bridgeConf   = "$qemuConfDir/bridge.conf"
+    if (-not (Test-Path $qemuConfDir)) { New-Item -ItemType Directory -Path $qemuConfDir -Force | Out-Null }
+    $allowLines   = $LabBridges | ForEach-Object { "allow $($_.Name)" }
+    $confContent  = $allowLines -join "`n"
+    # Always rewrite to ensure both bridges are listed
+    $confContent | Set-Content $bridgeConf -Encoding Utf8
+    Write-Host "  Wrote $bridgeConf :"
+    $allowLines | ForEach-Object { Write-Host "    $_" }
+
+    # ── SUID on qemu-bridge-helper ────────────────────────────────────────────
+    # Required so QEMU (running as the vagrant user under sudo) can create TAP
+    # devices and attach them to the bridge without a separate root process.
+    $helperPaths = @(
+        '/usr/lib/qemu/qemu-bridge-helper'
+        '/usr/libexec/qemu-bridge-helper'
+    )
+    $helperFound = $false
+    foreach ($h in $helperPaths) {
+        if (Test-Path $h) {
+            & bash -c "chmod u+s '$h'"
+            Write-Ok "SUID set on $h"
+            $helperFound = $true
+            break
+        }
+    }
+    if (-not $helperFound) {
+        Write-Warn 'qemu-bridge-helper not found at expected paths. Bridge networking may require sudo for TAP creation.'
+    }
+
+    # ── dnsmasq (DHCP for the bridges) ────────────────────────────────────────
+    if ($useApt) {
+        Install-AptPackage @('dnsmasq')
+    } else {
+        & bash -c 'dnf install -y dnsmasq'
+    }
+
+    $dnsmasqConfDir = '/etc/dnsmasq.d'
+    if (-not (Test-Path $dnsmasqConfDir)) { New-Item -ItemType Directory -Path $dnsmasqConfDir -Force | Out-Null }
+    
+    $dnsmasqConfFile = "$dnsmasqConfDir/sqlvagrantlab.conf"
+    Write-Host "  Writing DHCP configuration to $dnsmasqConfFile..."
+    @"
+# Managed by Install-Prerequisites.ps1
+# Bind only to the lab bridges
+interface=br0
+interface=br1
+bind-interfaces
+
+# Do not provide DNS, only DHCP
+port=0
+
+# RegionA (br0) DHCP range
+dhcp-range=interface:br0,10.0.50.100,10.0.50.254,24h
+# RegionB (br1) DHCP range
+dhcp-range=interface:br1,10.0.51.100,10.0.51.254,24h
+
+# Static DHCP reservations (MAC address -> IP)
+# These MACs are generated deterministically in Deploy-Lab.ps1
+dhcp-host=52:54:0a:00:32:0a,10.0.50.10,dc01
+dhcp-host=52:54:0a:00:32:14,10.0.50.20,sql01
+"@ | Set-Content $dnsmasqConfFile -Encoding Utf8
+
+    & bash -c 'systemctl restart dnsmasq || systemctl enable --now dnsmasq'
+    Write-Ok 'dnsmasq configured and restarted'
+}
+$Results['Bridges (br0/br1)'] = $LabBridges | ForEach-Object {
+    (& bash -c "ip link show '$($_.Name)' 2>/dev/null; echo $?").Trim() -eq '0'
+} | Where-Object { $_ -eq $false } | Measure-Object | Select-Object -ExpandProperty Count
+$Results['Bridges (br0/br1)'] = ($Results['Bridges (br0/br1)'] -eq 0)  # true if all up
+
+$Results['dnsmasq'] = (& bash -c "systemctl is-active dnsmasq 2>/dev/null; echo $?").Trim() -match '^0$'
+
 # ── 3. Packer ─────────────────────────────────────────────────────────────────
 
 Invoke-Step 'Install HashiCorp Packer' {
@@ -308,7 +436,21 @@ Invoke-Step 'Install powershell-yaml PS module' {
 }
 $Results['powershell-yaml'] = $null -ne (Get-Module -ListAvailable -Name powershell-yaml)
 
-# ── 8-11. ISO Downloads ───────────────────────────────────────────────────────
+# ── 8. dbatools module ────────────────────────────────────────────────────────
+
+Invoke-Step 'Install dbatools PS module' {
+    $mod = Get-Module -ListAvailable -Name dbatools
+    if (-not $mod) {
+        Write-Host "  Installing dbatools..."
+        Install-Module -Name dbatools -Scope CurrentUser -Force -AllowClobber
+    }
+    else {
+        Write-Ok "dbatools $($mod.Version) already installed"
+    }
+}
+$Results['dbatools'] = $null -ne (Get-Module -ListAvailable -Name dbatools)
+
+# ── 9-12. ISO Downloads ───────────────────────────────────────────────────────
 
 if (-not (Test-Path $MediaPath)) {
     New-Item -ItemType Directory -Path $MediaPath -Force | Out-Null

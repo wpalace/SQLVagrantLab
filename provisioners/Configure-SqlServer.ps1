@@ -51,6 +51,20 @@ Write-Step 'Configuring Windows Firewall rules...'
 Set-DbaFirewallRule -Type AllSqlServices -Action Allow -Force | Out-Null
 Write-Ok 'Firewall rules set (1433 TCP, 1434 UDP SQL Browser, DAC)'
 
+# Enable ICMPv4 (ping) — DC promotion opens this automatically, but plain
+# member servers have it blocked. Required for domain-join reachability checks
+# and general lab diagnostics (sql01 → dc01 ping).
+$icmpRule = Get-NetFirewallRule -Name 'FPS-ICMP4-ERQ-In' -ErrorAction SilentlyContinue
+if (-not $icmpRule -or $icmpRule.Enabled -ne 'True') {
+    Enable-NetFirewallRule -Name 'FPS-ICMP4-ERQ-In' -ErrorAction SilentlyContinue
+    # If the built-in rule doesn't exist, create one
+    if (-not (Get-NetFirewallRule -Name 'FPS-ICMP4-ERQ-In' -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -Name 'Lab-ICMPv4-In' -DisplayName 'Lab ICMPv4 Echo Request' `
+            -Protocol ICMPv4 -IcmpType 8 -Direction Inbound -Action Allow -Profile Any | Out-Null
+    }
+}
+Write-Ok 'ICMPv4 echo (ping) enabled'
+
 # ── 4. Set Max Server Memory ──────────────────────────────────────────────────
 
 Write-Step 'Setting safe max memory...'

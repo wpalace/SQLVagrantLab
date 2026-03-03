@@ -27,6 +27,7 @@ Vagrant.configure("2") do |config|
   config.ssh.shell      = "powershell"
   config.ssh.extra_args = ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
 
+
   # ── Disable default /vagrant synced folder (not needed for this lab) ─────────
   config.vm.synced_folder ".", "/vagrant", disabled: true
 
@@ -45,20 +46,22 @@ Vagrant.configure("2") do |config|
     qe.cpu             = "host"     # correct attr is 'cpu', not 'cpu_model'
 
     # Drivers: Windows native drivers only — no VirtIO out of the box
-    qe.net_device      = "e1000e"
+    qe.net_device      = nil       # Do NOT inject vagrant-qemu default NAT NIC
     qe.drive_interface = "ide"
 
     # Auto-correct SSH port collision
     qe.ssh_auto_correct = true
 
     # NOTE: extra_qemu_args is set per-machine below (includes -enable-kvm,
-    # -display none, AND the socket NIC for inter-VM networking)
+    # -display none, AND the bridge NIC for inter-VM networking)
   end
 
 <% @regions.each_with_index do |region, region_idx| %>
   # ============================================================================
   # Region: <%= region[:name] %> — Network: <%= region[:network] %>
-  # Multicast port for inter-VM socket NIC: <%= 5000 + region_idx %>
+  # Bridge: <%= region[:bridge] %> (host IP: <%= region[:gateway] %>)
+  # Each VM gets one e1000e NIC attached to this bridge via a kernel TAP device.
+  # VMs can communicate directly through the bridge without any host routing.
   # ============================================================================
 <% region[:nodes].each do |node| %>
   config.vm.define "<%= node[:hostname] %>", primary: <%= node.fetch(:primary, false) %> do |machine|
@@ -66,36 +69,24 @@ Vagrant.configure("2") do |config|
     machine.vm.box_url  = "file://<%= node[:box_path] %>"
 
     # ── Per-VM QEMU overrides ─────────────────────────────────────────────────
-    # - qe.ssh_port: unique host port for QEMU user-mode hostfwd
-    # - qe.smp: vCPU count (correct attr; 'cpus' is silently ignored)
-    # - extra_qemu_args: MUST include -enable-kvm/-display here because
-    #   per-machine args REPLACE global args in vagrant-qemu's merge.
-    #   Socket NIC provides inter-VM networking (all VMs in a region share
-    #   multicast group 230.0.0.1:<%= 5000 + region_idx %> as a virtual switch).
+    # extra_qemu_args REPLACES global args in vagrant-qemu — must include
+    # -enable-kvm and -display here, plus the bridge NIC (1 NIC total per VM).
     machine.vm.provider "qemu" do |qe|
       qe.smp      = "<%= node.fetch(:cpus, 2) %>"
       qe.memory   = "<%= node.fetch(:memory_mb, 2048) %>M"
-      qe.ssh_port = <%= node[:ssh_port] %>
+      qe.ssh_port = 22  # SSH directly to port 22 on the bridge IP, no host forwarding
+      # Single NIC attached to the host Linux bridge for this region.
+      # All VMs in the region share the bridge — no startup ordering required.
       qe.extra_qemu_args = [
         "-enable-kvm", "-display", "none",
-        "-netdev", "socket,id=lab-net,mcast=230.0.0.1:<%= 5000 + region_idx %>",
-        "-device", "e1000e,netdev=lab-net"
+        "-netdev", "bridge,id=lab-net,br=<%= region[:bridge] %>",
+        "-device", "e1000e,netdev=lab-net,mac=<%= node[:mac_address] %>"
       ]
     end
 
-    # Vagrant SSH port (for 'vagrant ssh' and health-check communication)
-    machine.ssh.port = <%= node[:ssh_port] %>
-
-    # ── Inter-VM network declaration ──────────────────────────────────────────
-    # The QEMU socket NIC above handles actual inter-VM traffic.
-    # This private_network declaration is kept for documentation / Virtualbox
-    # compatibility — QEMU ignores it in favour of extra_qemu_args above.
-    # The actual static IP is configured inside the guest by the SSH provisioner
-    # script (scripts/Provision-DomainController.ps1 → Set-StaticIP.ps1).
-    machine.vm.network "private_network",
-      ip:           "<%= node[:static_ip] %>",
-      netmask:      "<%= region[:netmask] %>",
-      virtualbox__intnet: "<%= region[:name].downcase %>_net"
+    # Vagrant SSH config (direct to bridge IP)
+    machine.ssh.host = "<%= node[:static_ip] %>"
+    machine.ssh.port = 22
 
   end  # define <%= node[:hostname] %>
 <% end %>

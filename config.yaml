@@ -20,14 +20,14 @@ global:
 
 regions:
   - name: RegionA
-    # Subnet for host-only network. Each region gets its own isolated network.
-    network: 192.168.10.0/24
+    # Bridge: br0 (10.0.50.1 on host). Each VM gets a TAP device on this bridge.
+    network: 10.0.50.0/24
     nodes:
       - hostname: dc01
         role: DomainController       # Promotes to AD DS forest root (first DC)
         os_version: "2022"           # "2022" or "2025"
         sql_version: "2022"          # reuse SQL box; SQL service is disabled at first boot
-        static_ip: 192.168.10.10
+        static_ip: 10.0.50.10
         cpus: 2
         memory_mb: 2048
 
@@ -35,17 +35,18 @@ regions:
         role: SQLServer
         os_version: "2022"
         sql_version: "2022"          # "2022" or "2025" — always Developer Edition
-        static_ip: 192.168.10.20
+        static_ip: 10.0.50.20
         cpus: 4
         memory_mb: 4096
 
 #  - name: RegionB
-#    network: 192.168.20.0/24
+#    # Bridge: br1 (10.0.51.1 on host). Uncomment region and run Deploy-Lab.ps1 to activate.
+#    network: 10.0.51.0/24
 #    nodes:
 #      - hostname: dc02
 #        role: DomainController       # Replica DC — joins existing forest
 #        os_version: "2025"
-#        static_ip: 192.168.20.10
+#        static_ip: 10.0.51.10
 #        cpus: 2
 #        memory_mb: 2048
 #
@@ -53,6 +54,6 @@ regions:
 #        role: SQLServer
 #        os_version: "2025"
 #        sql_version: "2025"
-#        static_ip: 192.168.20.20
+#        static_ip: 10.0.51.20
 #        cpus: 4
 #        memory_mb: 4096

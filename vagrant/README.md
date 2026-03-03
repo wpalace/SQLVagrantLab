@@ -122,6 +122,8 @@ Then run `vagrant up` again. A desktop window will appear showing the BIOS and W
 To shut down and completely delete the QEMU instance and its virtual disks:
 
 ```bash
+sudo killall qemu-system-x86_64
+sudo rm -rf .vagrant
 sudo vagrant destroy -f
 ```
 

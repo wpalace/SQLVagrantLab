@@ -66,7 +66,6 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Hostname,
-    [Parameter(Mandatory)][int]   $SshPort,
     [Parameter(Mandatory)][string]$StaticIP,
     [Parameter(Mandatory)][int]   $PrefixLength,
     [Parameter(Mandatory)][string]$Gateway,
@@ -97,8 +96,7 @@ $SshOpts = @(
     '-o', 'ConnectTimeout=8',
     '-o', 'ServerAliveInterval=10',
     '-o', 'ServerAliveCountMax=3',
-    '-p', $SshPort,
-    'vagrant@localhost'
+    "vagrant@$StaticIP"
 )
 
 function Invoke-RemotePS {
@@ -130,9 +128,8 @@ function Copy-RemoteScript {
     $scpArgs = @(
         '-o', 'StrictHostKeyChecking=no',
         '-o', 'UserKnownHostsFile=/dev/null',
-        '-P', $SshPort,
         $localPath,
-        "vagrant@localhost:$guestPath"
+        "vagrant@${StaticIP}:$guestPath"
     )
     $scpProc = Start-Process -FilePath 'sshpass' `
         -ArgumentList (@('-p', $SshPassword, 'scp') + $scpArgs) `
@@ -190,7 +187,7 @@ function Invoke-RebootAndWait {
 
 Write-Host ''
 Write-Host ('═' * 70) -ForegroundColor Magenta
-Write-Host " SQL Provisioner  →  $Hostname  port=$SshPort" -ForegroundColor Magenta
+Write-Host " SQL Provisioner  →  $Hostname  ip=$StaticIP" -ForegroundColor Magenta
 Write-Host ('═' * 70) -ForegroundColor Magenta
 
 # ── Step 1: Set hostname ──────────────────────────────────────────────────────
@@ -233,6 +230,11 @@ Write-Step 'Step 2/4 — Set static IP + join domain'
 $rc = Copy-RemoteScript -ScriptName 'Set-StaticIP.ps1' `
     -ScriptArgs @($StaticIP, $PrefixLength, $Gateway, $DcIpAddress)
 if ($rc -ne 0) { Write-Fail "Step 2 (Set-StaticIP) failed (exit $rc)" }
+
+Write-Info "Waiting 10s for guest to apply network changes..."
+Start-Sleep -Seconds 10
+Wait-SshReady -Reason 'network interface reset'
+
 Write-Info "Static IP $StaticIP/$PrefixLength set — lab NIC can now reach the DC"
 
 $rc = Copy-RemoteScript -ScriptName 'Join-Domain.ps1' `

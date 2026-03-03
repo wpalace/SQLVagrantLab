@@ -67,7 +67,6 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Hostname,
-    [Parameter(Mandatory)][int]   $SshPort,
     [Parameter(Mandatory)][string]$StaticIP,
     [Parameter(Mandatory)][int]   $PrefixLength,
     [Parameter(Mandatory)][string]$Gateway,
@@ -101,8 +100,7 @@ $SshOpts = @(
     '-o', 'ConnectTimeout=8',
     '-o', 'ServerAliveInterval=10',
     '-o', 'ServerAliveCountMax=3',
-    '-p', $SshPort,
-    'vagrant@localhost'
+    "vagrant@$StaticIP"
 )
 
 # ---------------------------------------------------------------------------
@@ -160,9 +158,8 @@ function Copy-RemoteScript {
     $scpArgs = @(
         '-o', 'StrictHostKeyChecking=no',
         '-o', 'UserKnownHostsFile=/dev/null',
-        '-P', $SshPort,
         $localPath,
-        "vagrant@localhost:$guestPath"
+        "vagrant@${StaticIP}:$guestPath"
     )
     $scpProc = Start-Process -FilePath 'sshpass' `
         -ArgumentList (@("-p", $SshPassword, 'scp') + $scpArgs) `
@@ -246,7 +243,7 @@ function Invoke-RebootAndWait {
 
 Write-Host ''
 Write-Host ('═' * 70) -ForegroundColor Magenta
-Write-Host " DC Provisioner  →  $Hostname  ($DcMode DC)  port=$SshPort" -ForegroundColor Magenta
+Write-Host " DC Provisioner  →  $Hostname  ($DcMode DC)  ip=$StaticIP" -ForegroundColor Magenta
 Write-Host ('═' * 70) -ForegroundColor Magenta
 
 # ── Step 1: Set hostname ──────────────────────────────────────────────────────
@@ -283,51 +280,55 @@ Invoke-RebootAndWait -Reason 'hostname rename'
 
 Write-Ok 'Hostname set and VM back online'
 
-# ── Step 2: Promote to Domain Controller ─────────────────────────────────
+# ── Step 2: Set static IP ───────────────────────────────────────────────────
+
+Write-Step 'Step 2/4 — Set static IP on lab NIC'
+
+$rc = Copy-RemoteScript -ScriptName 'Set-StaticIP.ps1' `
+    -ScriptArgs @($StaticIP, $PrefixLength, $Gateway, $DnsServer)
+if ($rc -ne 0) { Write-Fail "Step 2 failed (exit $rc)" }
+
+Write-Info "Waiting 10s for guest to apply network changes..."
+Start-Sleep -Seconds 10
+Wait-SshReady -Reason 'network interface reset'
+
+Write-Ok "Static IP $StaticIP/$PrefixLength set"
+
+# ── Step 3: Promote to Domain Controller ─────────────────────────────────
 
 # Windows blocks DC promotion when the built-in Administrator password is blank.
 # The Packer box ships with a blank Administrator password, so we harden it first.
-Write-Step 'Step 2/4 — Harden local Administrator password + Install AD DS'
+Write-Step 'Step 3/4 — Harden local Administrator password + Install AD DS'
 
 $localAdminPassword = 'vagrantStr0ngP@ss'
 $setPassCmd = "net user Administrator '$localAdminPassword'"
 $rc = Invoke-RemotePS -Command $setPassCmd -Description 'Set local Administrator password'
-if ($rc -ne 0) { Write-Fail "Step 2 (set Administrator password) failed (exit $rc)" }
+if ($rc -ne 0) { Write-Fail "Step 3 (set Administrator password) failed (exit $rc)" }
 Write-Info "Local Administrator password set"
 
 $rc = Copy-RemoteScript -ScriptName 'Install-ADDSForest.ps1' `
     -ScriptArgs @($DomainName, $AdminPassword, $DcMode) `
     -Shell 'powershell.exe'   # ADDSDeployment uses CustomPSSnapIn — PS7-only shell cannot load it
-if ($rc -ne 0) { Write-Fail "Step 2 (ADDS promotion) failed (exit $rc)" }
+if ($rc -ne 0) { Write-Fail "Step 3 (ADDS promotion) failed (exit $rc)" }
 
 Invoke-RebootAndWait -Reason 'AD DS promotion'
 
 Write-Ok "AD DS promotion complete ($DcMode)"
 
-# ── Step 3: Create lab admin account (Forest DC only) ───────────────────────
+# ── Step 4: Create lab admin account (Forest DC only) ───────────────────────
 
 if ($DcMode -eq 'Forest') {
-    Write-Step 'Step 3/4 — Create lab admin account'
+    Write-Step 'Step 4/4 — Create lab admin account'
 
     $rc = Copy-RemoteScript -ScriptName 'New-LabAdminAccount.ps1' `
         -ScriptArgs @($DomainName, $AdminUser, $AdminPassword)
-    if ($rc -ne 0) { Write-Fail "Step 3 failed (exit $rc)" }
+    if ($rc -ne 0) { Write-Fail "Step 4 failed (exit $rc)" }
 
     Write-Ok "Lab admin '$AdminUser@$DomainName' created"
 } else {
-    Write-Step 'Step 3/4 — Skipped (Replica DC — no admin account needed here)'
+    Write-Step 'Step 4/4 — Skipped (Replica DC — no admin account needed here)'
     Write-Ok 'Skipped'
 }
-
-# ── Step 4: Set static IP ───────────────────────────────────────────────────
-
-Write-Step 'Step 4/4 — Set static IP on lab NIC'
-
-$rc = Copy-RemoteScript -ScriptName 'Set-StaticIP.ps1' `
-    -ScriptArgs @($StaticIP, $PrefixLength, $Gateway, $DnsServer)
-if ($rc -ne 0) { Write-Fail "Step 4 failed (exit $rc)" }
-
-Write-Ok "Static IP $StaticIP/$PrefixLength set"
 
 # =============================================================================
 # Done

@@ -62,9 +62,10 @@ $args = @(
     '/QUIET'
     '/IACCEPTSQLSERVERLICENSETERMS'
     '/INSTANCENAME=MSSQLSERVER'
-    '/EDITION=Developer'
+    '/INSTANCEID=MSSQLSERVER'
     "/SQLSVCACCOUNT=$svcAccount"
     "/SQLSVCPASSWORD=$AdminPassword"
+    '/SECURITYMODE=SQL'
     "/SAPWD=$AdminPassword"
     "/SQLSYSADMINACCOUNTS=$svcAccount"
     "/AGTSVCACCOUNT=$svcAccount"

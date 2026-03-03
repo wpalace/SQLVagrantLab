@@ -14,18 +14,34 @@ Before deploying, ensure the following are installed and configured on the host:
 |---|---|
 | QEMU + KVM | `sudo apt install qemu-system-x86`; user must be in the `kvm` group |
 | Vagrant | `sudo apt install vagrant` or install from [vagrantup.com](https://vagrantup.com) |
+| bridge-utils | `sudo apt install bridge-utils` — automated by `Install-Prerequisites.ps1` |
 | sshpass | `sudo apt install sshpass` (used for headless VM authentication) |
 | vagrant-qemu plugin | `vagrant plugin install vagrant-qemu` |
 | vagrant-reload plugin | `vagrant plugin install vagrant-reload` |
 | PowerShell 7 (`pwsh`) | Required to run `Deploy-Lab.ps1` |
 | Pre-built `.box` files | Built by Packer — see [`packer/README.md`](packer/README.md) |
 
-> **Important**: The `Install-Prerequisites.ps1` script will automate the installation of `qemu`, `vagrant`, `pwsh`, and the required Vagrant plugins on a fresh Linux machine. 
-> 
+> **Important**: The `Install-Prerequisites.ps1` script automates the installation of all tools above — including QEMU, Vagrant, PowerShell, Vagrant plugins, and the lab network bridges.
+>
 > ```bash
 > sudo pwsh -File Install-Prerequisites.ps1
 > ```
-> *Note: If you do not run this, you must manually install the `vagrant-qemu` and `vagrant-reload` plugins before continuing.*
+
+### Linux Network Bridges
+
+This lab uses Linux software bridges for VM-to-VM networking. Each region gets its own bridge on the host:
+
+| Bridge | Region | Host IP | VM Subnet |
+|--------|--------|---------|----------|
+| `br0` | RegionA | `10.0.50.1` | `10.0.50.0/24` |
+| `br1` | RegionB | `10.0.51.1` | `10.0.51.0/24` |
+
+`Install-Prerequisites.ps1` creates both bridges (even when RegionB is inactive) and configures:
+- `/etc/netplan/60-lab-bridges.yaml` — persistent bridge config across reboots
+- `/etc/qemu/bridge.conf` — allows QEMU to attach TAP devices to the bridges
+- SUID on `qemu-bridge-helper` — allows unprivileged QEMU to create TAP interfaces
+
+> **Note on inter-region connectivity**: `br0` and `br1` are isolated by default. They can later be connected to each other (or a physical NIC) by adding a `veth` pair between them — without touching the VMs.
 
 ---
 
@@ -70,20 +86,20 @@ global:
 
 regions:
   - name: RegionA
-    network: 192.168.10.0/24
+    network: 10.0.50.0/24    # maps to host bridge br0 (10.0.50.1)
     nodes:
       - hostname: dc01
         role: DomainController
         os_version: "2022"
         sql_version: "2022"
-        static_ip: 192.168.10.10
+        static_ip: 10.0.50.10
         cpus: 2
         memory_mb: 2048
       - hostname: sql01
         role: SQLServer
         os_version: "2022"
         sql_version: "2022"
-        static_ip: 192.168.10.20
+        static_ip: 10.0.50.20
         cpus: 4
         memory_mb: 4096
 ```
@@ -173,6 +189,29 @@ If Vagrant reports that port `50022` (or `50023`) is already in use, a zombie QE
 sudo lsof -i :50022
 sudo kill -9 <pid>
 ```
+
+---
+
+### Bridge networking issues
+
+**Bridge not found on `vagrant up`** — QEMU will error if `br0` or `br1` don't exist. Verify:
+
+```bash
+ip link show br0
+ip link show br1
+cat /etc/qemu/bridge.conf
+ls -la /usr/lib/qemu/qemu-bridge-helper   # should show rwsr-xr-x
+```
+
+If bridges are missing, re-run `Install-Prerequisites.ps1` to recreate them, or bring them up manually:
+
+```bash
+sudo ip link add name br0 type bridge
+sudo ip addr add 10.0.50.1/24 dev br0
+sudo ip link set br0 up
+```
+
+**VM can reach host but not other VMs** — confirm both VMs are on the same bridge and their Windows static IPs are configured correctly inside the guest. Use `Get-NetIPAddress` in a guest PowerShell session to verify.
 
 ---
 
