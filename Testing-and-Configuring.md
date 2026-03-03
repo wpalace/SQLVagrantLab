@@ -30,7 +30,7 @@ Run this PowerShell command on your host:
 $cred = New-Object System.Management.Automation.PSCredential("sa", (ConvertTo-SecureString "P@ssw0rd" -AsPlainText -Force))
 
 # Connect to the loopback forwarded port and execute query
-Connect-DbaInstance -SqlInstance "127.0.0.1,51433" -SqlCredential $cred -TrustServerCertificate | Invoke-DbaQuery -Query "SELECT @@SERVERNAME as ServerName, @@VERSION as Version"
+Connect-DbaInstance -SqlInstance "127.0.0.1,51433" -SqlCredential $cred -TrustServerCertificate | Invoke-DbaQuery -Query "SELECT @@SERVERNAME as ServerName, @@VERSION as Version" | ft -wrap -autosize
 ```
 
 If successful, you will see output similar to the following, confirming SQL Server is successfully responding to queries:

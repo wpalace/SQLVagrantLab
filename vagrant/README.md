@@ -123,8 +123,8 @@ To shut down and completely delete the QEMU instance and its virtual disks:
 
 ```bash
 sudo killall qemu-system-x86_64
-sudo rm -rf .vagrant
 sudo vagrant destroy -f
+sudo rm -rf .vagrant
 ```
 
 *(Note: If you change physical hardware properties like `qe.machine` or `qe.net_device`, you **must** run `vagrant destroy` to wipe the disk before running `vagrant up` again. QEMU and Windows cache the hardware profile from the first boot.)*
