@@ -18,23 +18,27 @@ variable "zone" {
 variable "machine_type" {
   description = "The predefined GCP machine type, or a custom one defined by cpu and memory variables"
   type        = string
-  default     = "custom" # Can be e.g. "n2-standard-4"
+  default     = "e2-standard-2" # Can be e.g. "n2-standard-4"
 }
 
 variable "custom_cpu" {
   description = "Number of vCPUs for custom machine type"
   type        = number
-  default     = 4
+  default     = 2
 }
 
 variable "custom_memory_mb" {
   description = "Memory in MB for custom machine type"
   type        = number
-  default     = 8192
+  default     = 4096
 }
 
-variable "nixos_image" {
-  description = "The name or family of the NixOS image created via flakes"
+variable "iso_bucket_name" {
+  description = "The name of the GCS bucket storing the ISO files"
   type        = string
-  default     = "sqlvagrantlab-nixos-image"
+}
+
+variable "snapshot_bucket_name" {
+  description = "The name of the GCS bucket storing the snapshots"
+  type        = string
 }

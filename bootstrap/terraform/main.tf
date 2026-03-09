@@ -12,6 +12,19 @@ resource "google_compute_firewall" "allow-remote-management" {
   target_tags   = ["sqlvagrantlab-host"]
 }
 
+# Create a devoted Service Account for this VM
+resource "google_service_account" "sqlvagrantlab_sa" {
+  account_id   = "sqlvagrantlab-sa"
+  display_name = "SQLVagrantLab Service Account"
+}
+
+# Grant the Service Account read permission to the ISO bucket
+resource "google_storage_bucket_iam_member" "iso_bucket_viewer" {
+  bucket = var.iso_bucket_name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.sqlvagrantlab_sa.email}"
+}
+
 # The GCP VM Instance
 resource "google_compute_instance" "sqlvagrantlab_vm" {
   name = "sqlvagrantlab-host"
@@ -25,7 +38,8 @@ resource "google_compute_instance" "sqlvagrantlab_vm" {
 
   boot_disk {
     initialize_params {
-      image = var.nixos_image
+      # Use a standard Ubuntu 24.04 image
+      image = "ubuntu-os-cloud/ubuntu-2404-lts-amd64"
       size  = 100 # Adjust as needed for the vagrant boxes
       type  = "pd-balanced"
     }
@@ -42,8 +56,15 @@ resource "google_compute_instance" "sqlvagrantlab_vm" {
     enable_nested_virtualization = true
   }
 
+  service_account {
+    email  = google_service_account.sqlvagrantlab_sa.email
+    scopes = ["cloud-platform"]
+  }
+
   metadata = {
-    # If the image expects ssh keys through metadata:
-    # ssh-keys = "vagrant:${file("~/.ssh/id_rsa.pub")}"
+    # Generate the startup-script by interpolating terraform variables into the bash script
+    startup-script = templatefile("${path.module}/scripts/bootstrap-vm.sh", {
+      iso_bucket_name = var.iso_bucket_name
+    })
   }
 }

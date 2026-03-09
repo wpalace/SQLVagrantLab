@@ -19,3 +19,10 @@ output-*/
 # Data and Logs
 data/
 logs/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfvars

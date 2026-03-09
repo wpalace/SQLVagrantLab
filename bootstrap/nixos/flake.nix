@@ -29,7 +29,13 @@
           users.users.labuser = {
             isNormalUser = true;
             extraGroups = [ "wheel" "libvirtd" "kvm" ];
-            password = "P@ssw0rd"; # For RDP access, ideally this should be replaced with ssh keys or set via GCP metadata.
+            initialPassword = "P@ssw0rd"; # Sets plaintext initial password
+          };
+
+          # Enable SSH with password authentication
+          services.openssh = {
+            enable = true;
+            settings.PasswordAuthentication = true;
           };
 
           # Allow unfree packages (vscode, etc)
