@@ -21,7 +21,7 @@ You have two options to fix this:
 ### Option 1: Temporary (Per Command)
 Append the `--extra-experimental-features "nix-command flakes"` flag to your `nix build` command:
 ```bash
-nix --extra-experimental-features "nix-command flakes" build .#nixosConfigurations.sqlvagrantlab.config.system.build.googleComputeImage
+nix --extra-experimental-features "nix-command flakes" build .#nixosConfigurations.sqlvagrantlab.config.system.build.googleComputeImage -o sqlvagrantlab
 ```
 
 ### Option 2: Permanent (Recommended)
@@ -32,7 +32,7 @@ experimental-features = nix-command flakes
 ```
 Then you can run commands normally:
 ```bash
-nix build .#nixosConfigurations.sqlvagrantlab.config.system.build.googleComputeImage
+nix build .#nixosConfigurations.sqlvagrantlab.config.system.build.googleComputeImage -o sqlvagrantlab
 ```
 
 ## Building the Image
@@ -44,10 +44,10 @@ cd bootstrap/nixos
 
 2. Run the build command:
 ```bash
-nix build .#nixosConfigurations.sqlvagrantlab.config.system.build.googleComputeImage
+nix build .#nixosConfigurations.sqlvagrantlab.config.system.build.googleComputeImage -o sqlvagrantlab
 ```
 
-This will run for a few minutes and output a `.tar.gz` file located in the `./result/` directory.
+This will run for a few minutes and output a `.tar.gz` file located in the `./sqlvagrantlab/` directory.
 
 3. Complete the deployment:
 Upload this file to a GCS bucket, create a custom Machine Image using the tarball, and then deploy it using the Terraform setup in `bootstrap/terraform/`.
