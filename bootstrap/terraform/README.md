@@ -24,7 +24,7 @@ To allow Packer to build the Windows and SQL Server images on the headless cloud
 
 Run the automated upload script, pointing it to the local directory where your ISO files live:
 ```bash
-./scripts/upload_isos.sh /path/to/your/ISOs/
+./scripts/upload_isos.sh /opt/packer-media/
 ```
 
 ### Step 3: Initialize Terraform
@@ -36,7 +36,7 @@ terraform init -upgrade -backend-config=backend.tfvars
 ### Step 4: Apply the Infrastructure
 Review the deployment plan and apply the configuration to build the VM:
 ```bash
-terraform apply -var-file=terraform.tfvars
+terraform apply 
 ```
 
 ---

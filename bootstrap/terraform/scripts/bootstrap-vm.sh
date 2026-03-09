@@ -32,6 +32,8 @@ echo "PasswordAuthentication yes" > /etc/ssh/sshd_config.d/01-labuser-password-a
 systemctl restart ssh
 
 # Restart xrdp and ensure it has access to ssl certificates
+# Provide the ssl-cert package just in case it's not installed yet prior to adding the user
+apt-get install -y ssl-cert
 adduser xrdp ssl-cert || true
 systemctl enable xrdp
 systemctl restart xrdp
@@ -59,11 +61,6 @@ apt-get install -y powershell
 echo "Cloning SQLVagrantLab repository..."
 su - labuser -c "git clone https://github.com/wpalace/SQLVagrantLab.git /home/labuser/SQLVagrantLab"
 
-# 4. Download ISOs from GCS bucket
-echo "Downloading ISOs from gs://${iso_bucket_name}..."
-# Create the target directory
-su - labuser -c "mkdir -p /home/labuser/SQLVagrantLab/packer/"
-# Use gsutil to copy the ISOs, running as labuser but using the VM's service account credentials
-su - labuser -c "gsutil -m cp gs://${iso_bucket_name}/*.iso /home/labuser/SQLVagrantLab/packer/" || echo "Warning: No ISOs found or download failed."
-
+# 4. Finish up
 echo "==== Bootstrapping Complete ===="
+echo "Note: Run download_isos.sh to manually retrieve ISOs."
