@@ -56,12 +56,20 @@ resource "google_compute_instance" "sqlvagrantlab_vm" {
     enable_nested_virtualization = true
   }
 
+  scheduling {
+    preemptible                 = true # cost savings at the risk of VM being terminated
+    automatic_restart           = false
+    provisioning_model          = "SPOT"
+    instance_termination_action = "STOP"
+  }
+
   service_account {
     email  = google_service_account.sqlvagrantlab_sa.email
     scopes = ["cloud-platform"]
   }
 
   metadata = {
+    iso-bucket-name = var.iso_bucket_name
     # Generate the startup-script by interpolating terraform variables into the bash script
     startup-script = templatefile("${path.module}/scripts/bootstrap-vm.sh", {
       iso_bucket_name = var.iso_bucket_name

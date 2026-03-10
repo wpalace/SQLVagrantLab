@@ -18,7 +18,7 @@ variable "zone" {
 variable "machine_type" {
   description = "The predefined GCP machine type, or a custom one defined by cpu and memory variables"
   type        = string
-  default     = "e2-standard-2" # Can be e.g. "n2-standard-4"
+  default     = "n2d-standard-4" # must support nested virtualization (n series will, e will not)
 }
 
 variable "custom_cpu" {

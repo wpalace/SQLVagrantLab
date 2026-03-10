@@ -358,7 +358,8 @@ $Results['Bridges (br0/br1)'] = $LabBridges | ForEach-Object {
 } | Where-Object { $_ -eq $false } | Measure-Object | Select-Object -ExpandProperty Count
 $Results['Bridges (br0/br1)'] = ($Results['Bridges (br0/br1)'] -eq 0)  # true if all up
 
-$Results['dnsmasq'] = (& bash -c "systemctl is-active dnsmasq 2>/dev/null; echo $?").Trim() -match '^0$'
+& bash -c "systemctl is-active --quiet dnsmasq"
+$Results['dnsmasq'] = ($LASTEXITCODE -eq 0)
 
 # ── 3. Packer ─────────────────────────────────────────────────────────────────
 

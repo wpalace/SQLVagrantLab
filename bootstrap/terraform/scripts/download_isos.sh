@@ -3,22 +3,16 @@ set -e
 
 # SQLVagrantLab ISO Downloader
 # This script must be run on the provisioned SQLVagrantLab VM.
-# It automatically finds the attached ISO bucket and downloads the ISOs.
+# It automatically reads the assigned ISO bucket from the GCP instance metadata.
 
-echo "Looking up your assigned SQLVagrantLab ISO bucket..."
-ISO_BUCKET_NAME=$(gcloud storage ls 2>/dev/null | grep -o 'gs://sqlvagrantlab-isos-[a-zA-Z0-9-]*' | head -n 1 | tr -d '/' || true)
+echo "Looking up your assigned SQLVagrantLab ISO bucket from Instance Metadata..."
+ISO_BUCKET_NAME=$(curl -s -f -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/attributes/iso-bucket-name" || true)
 
 if [ -z "$ISO_BUCKET_NAME" ]; then
-    echo "Error: Could not automatically detect the ISO bucket for this project."
-    echo "Please ensure the VM has the correct service account attached."
+    echo "Error: Could not retrieve the ISO bucket name from instance metadata."
+    echo "Please ensure the VM was provisioned with the 'iso-bucket-name' metadata tag."
     exit 1
 fi
-
-# We strip the gs:// prefix if grep left it, though grep only caught the domain.
-# Actually, the grep grabbed gs://... so let's format it.
-# The previous grep grabbed exactly gs://bucket-name, and tr removed the slashes.
-# Let's clean that up to be sure.
-ISO_BUCKET_NAME=$(gcloud storage ls 2>/dev/null | grep -o 'gs://sqlvagrantlab-isos-[a-zA-Z0-9-]*' | head -n 1)
 
 echo "Found bucket: ${ISO_BUCKET_NAME}"
 
@@ -28,6 +22,6 @@ sudo mkdir -p "${TARGET_DIR}"
 sudo chown -R $USER:$USER "${TARGET_DIR}"
 
 echo "Downloading ISOs..."
-gsutil -m cp "${ISO_BUCKET_NAME}/*.iso" "${TARGET_DIR}/"
+gsutil -m cp "gs://${ISO_BUCKET_NAME}/*.iso" "${TARGET_DIR}/"
 
 echo "Download complete! ISOs are available in ${TARGET_DIR}."
