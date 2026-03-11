@@ -28,6 +28,10 @@ OLD_DISK=$(gcloud compute instances describe ${INSTANCE_NAME} --project="${PROJE
 NEW_DISK="${INSTANCE_NAME}-restored-$(date +%s)"
 
 echo "Stopping instance ${INSTANCE_NAME}..."
+# Because this host runs nested QEMU VMs that may ignore the standard ACPI power-off 
+# signal, a graceful shutdown can sometimes hang indefinitely. We are adding a SSH
+# command to aggressively kill all QEMU processes before asking GCP to stop the instance.
+gcloud compute ssh ${INSTANCE_NAME} --project="${PROJECT_ID}" --zone=${ZONE} --command="sudo pkill -9 qemu-system-x86_64" || true
 gcloud compute instances stop ${INSTANCE_NAME} --project="${PROJECT_ID}" --zone=${ZONE}
 
 echo "Creating new disk '${NEW_DISK}' from snapshot '${SNAPSHOT_NAME}'..."
