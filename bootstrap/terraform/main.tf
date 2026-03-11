@@ -27,7 +27,8 @@ resource "google_storage_bucket_iam_member" "iso_bucket_viewer" {
 
 # The GCP VM Instance
 resource "google_compute_instance" "sqlvagrantlab_vm" {
-  name = "sqlvagrantlab-host"
+  name                      = "sqlvagrantlab-host"
+  allow_stopping_for_update = true
 
   # Logic to handle predefined vs custom machine types
   machine_type = var.machine_type == "custom" ? "custom-${var.custom_cpu}-${var.custom_memory_mb}" : var.machine_type

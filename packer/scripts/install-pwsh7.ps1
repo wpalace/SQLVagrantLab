@@ -21,9 +21,10 @@ $ZipPath = Join-Path $env:TEMP $ZipName
 $InstallDir = 'C:\Program Files\PowerShell\7'
 
 Write-Host "==> [install-pwsh7] Downloading PowerShell $PwshVersion ZIP..."
+$ProgressPreference = 'SilentlyContinue'
 try {
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Invoke-WebRequest -Uri $ZipUrl -OutFile $ZipPath -UseBasicParsing
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+    Invoke-WebRequest -Uri $ZipUrl -OutFile $ZipPath -UseBasicParsing -ErrorAction Stop
 }
 catch {
     Write-Error "Failed to download PowerShell ZIP from $ZipUrl : $_"
